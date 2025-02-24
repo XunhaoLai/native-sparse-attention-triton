@@ -118,6 +118,26 @@ python test/test_topk_sparse_attention.py
 python test/test_nsa_w_rope.py
 ```
 
+### Benchmarks
+
+```sh
+** forward with block size 64 **:
+         N      Flash  Triton-Flash  Triton-Top8  Triton-Top16
+0   2048.0   0.247232      0.365920     0.273440      0.456608
+1   4096.0   0.760672      1.226640     0.521120      0.874240
+2   8192.0   2.706912      4.451872     1.009248      1.710320
+3  16384.0  10.247040     16.811008     1.997696      3.388352
+4  32768.0  39.650383     65.532028     3.978768      6.744656
+
+** backward with block size 64 **:
+         N       Flash  Triton-Flash  Triton-Top8  Triton-Top16
+0   2048.0    0.741216      1.752576     1.270288      1.646496
+1   4096.0    2.264448      6.235072     1.861792      2.622128
+2   8192.0    7.818064     24.082623     3.102800      4.736192
+3  16384.0   29.267200     97.103806     5.942896      9.158496
+4  32768.0  114.074753    384.978882    11.771808     18.923136
+```
+
 ## Contributing
 Contributions are welcome! Please open an issue to discuss major changes.
 
