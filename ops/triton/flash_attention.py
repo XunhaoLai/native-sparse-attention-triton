@@ -212,7 +212,7 @@ def backward_dkdv(
     d_ptr,  # Delta: qh x n
     do_ptr,
     dk_ptr,  # DK: sh x n x kh x d
-    dv_ptr,  # DK: sh x n x kh x d
+    dv_ptr,  # DV: sh x n x kh x d
     # seqlens
     cu_seqlens_q,
     cu_seqlens_k,
@@ -321,7 +321,6 @@ def backward_dkdv(
         q_lo = pid_k * BLOCK_SIZE_K
     else:
         q_lo = 0
-    # loop for q heads
     q_ptrs = tl.make_block_ptr(
         base=q_ptr + q_start * stride_qn + pid_h * stride_qh,
         shape=(q_len, HEAD_DIM),
