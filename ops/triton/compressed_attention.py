@@ -1090,7 +1090,7 @@ def compressed_attention(
     init_blocks: int = 1,
     local_blocks: int = 2,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Attention between query and compressed key and value. Implemented with torch, only for debug.
+    """Attention between query and compressed key and value. Compute attention output and topk block idx used in topk_sparse_attention.
 
     Args:
         q (torch.Tensor): shape [total_q_len, num_q_heads, head_dim]
@@ -1124,7 +1124,7 @@ def compressed_attention(
         sm_scale,
     )
     with torch.no_grad():
-        # recompute score, -inf means padding
+        # recompute score
         score = _get_attention_score(
             q,
             k,

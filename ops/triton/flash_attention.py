@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
-from typing import Any
+from typing import Any, Optional
 
 import torch
 import triton
@@ -867,10 +867,27 @@ def flash_attention_varlen(
     cu_seqlens_k: torch.Tensor,
     max_seqlen_q: torch.Tensor,
     max_seqlen_k: torch.Tensor,
-    causal=False,
-    sm_scale=None,
-    gqa_interleave=False,
-):
+    causal: bool = False,
+    sm_scale: Optional[float] = None,
+    gqa_interleave: bool = False,
+) -> torch.Tensor:
+    """Flash attention with variable length based on triton.
+
+    Args:
+        q (torch.Tensor): shape [total_q_len, num_q_heads, head_dim]
+        k (torch.Tensor): shape [total_kv_len, num_q_heads, head_dim]
+        v (torch.Tensor): shape [total_kv_len, num_q_heads, head_dim]
+        cu_seqlens_q (torch.Tensor): shape [batch_size + 1], similar to cu_seqlens_q in flash_attn_func_varlen.
+        cu_seqlens_k (torch.Tensor): shape [batch_size + 1], similar to cu_seqlens_k in flash_attn_func_varlen.
+        max_seqlen_q (torch.Tensor): max q len of the batch.
+        max_seqlen_k (torch.Tensor): max k len of the batch.
+        causal (bool, optional): Causal mask. Defaults to False.
+        sm_scale (float, optional): softmax scale. Defaults to None, means 1/sqrt(head_dim).
+        gqa_interleave (bool, optional): GQA pattern. Defaults to False, use Llama style GQA.
+
+    Returns:
+        torch.Tensor: attention output with shape [total_q_len, num_q_heads, head_dim]
+    """
     return FlashAttention.apply(
         q,
         k,

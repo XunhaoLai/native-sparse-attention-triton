@@ -1165,7 +1165,7 @@ def topk_sparse_attention(
     block_size: int,
     cu_seqlens: torch.Tensor,
     softmax_scale: Optional[float] = None,
-):
+) -> torch.Tensor:
     """Topk sparse attention varlen version implemented in triton.
 
     Args:
