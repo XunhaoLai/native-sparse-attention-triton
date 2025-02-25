@@ -153,7 +153,7 @@ def forward_kernel(
         block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_D),
         order=(1, 0),
     )
-    tl.store(o_ptrs, acc_o.to(o_ptr.dtype.element_ty), boundary_check=(0,))
+    tl.store(o_ptrs, acc_o.to(o_ptr.dtype.element_ty), boundary_check=(0, 1))
     # save lse
     l_ptrs = lse_ptr + q_start * stride_ln + pid_h * stride_lh + off_q * stride_ln
     tl.store(l_ptrs, lse_i, mask=off_q < q_len)
@@ -358,8 +358,8 @@ def backward_dkdv(
         # load
         q = tl.load(q_ptrs, boundary_check=(0, 1), padding_option="zero")
         do = tl.load(do_ptrs, boundary_check=(0, 1), padding_option="zero")
-        lse = tl.load(lse_ptrs, boundary_check=(0,), padding_option="zero")
-        d = tl.load(d_ptrs, boundary_check=(0,), padding_option="zero")
+        lse = tl.load(lse_ptrs, boundary_check=(0, 1), padding_option="zero")
+        d = tl.load(d_ptrs, boundary_check=(0, 1), padding_option="zero")
         # compute qk
         if causal:
             qk = tl.where(
@@ -514,8 +514,8 @@ def backward_dq(
     # load q, do, lse, delta, and keep in SRAM
     q = tl.load(q_ptrs, boundary_check=(1, 0), padding_option="zero")
     do = tl.load(do_ptrs, boundary_check=(0, 1), padding_option="zero")
-    lse = tl.load(lse_ptrs, boundary_check=(0,), padding_option="zero")
-    d = tl.load(d_ptrs, boundary_check=(0,), padding_option="zero")
+    lse = tl.load(lse_ptrs, boundary_check=(0, 1), padding_option="zero")
+    d = tl.load(d_ptrs, boundary_check=(0, 1), padding_option="zero")
     # init dq
     dq = tl.zeros((BLOCK_SIZE_Q, BLOCK_SIZE_D), dtype=tl.float32)
     # causal

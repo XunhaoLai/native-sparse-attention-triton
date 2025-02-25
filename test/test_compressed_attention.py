@@ -19,7 +19,7 @@ from ops.torch.compress_key_value import conv_compress
 if __name__ == "__main__":
     torch.manual_seed(42)
     num_heads = 32
-    head_dim = 128
+    head_dim = 96
     kernel_size = 32
     kernel_stride = 16
     block_size = 64

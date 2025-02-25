@@ -639,8 +639,8 @@ def backward_dkdv(
         dk += tl.dot(ds.T, q)
         dv += tl.dot(p.T, do)
     # save dk dv
-    tl.store(dk_ptrs, dk.to(k.dtype), boundary_check=(0, 1))
-    tl.store(dv_ptrs, dv.to(v.dtype), boundary_check=(0, 1))
+    tl.store(dk_ptrs, dk.to(dk_ptr.dtype.element_ty), boundary_check=(0, 1))
+    tl.store(dv_ptrs, dv.to(dv_ptr.dtype.element_ty), boundary_check=(0, 1))
 
 
 @triton.jit
@@ -774,8 +774,8 @@ def backward_dq(
     # load q, do, lse, delta, and keep in SRAM
     q = tl.load(q_ptrs, boundary_check=(1, 0), padding_option="zero")
     do = tl.load(do_ptrs, boundary_check=(0, 1), padding_option="zero")
-    lse = tl.load(lse_ptrs, boundary_check=(0,), padding_option="zero")
-    d = tl.load(d_ptrs, boundary_check=(0,), padding_option="zero")
+    lse = tl.load(lse_ptrs, boundary_check=(0, 1), padding_option="zero")
+    d = tl.load(d_ptrs, boundary_check=(0, 1), padding_option="zero")
     # init dq
     dq = tl.zeros((BLOCK_SIZE_H, BLOCK_SIZE_D), dtype=tl.float32)
     # sparse
