@@ -55,6 +55,8 @@ def conv_compress(
     # compute seqlens after compression
     seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
     y_seqlens = torch.floor((seqlens - kernel_size) / kernel_stride).to(torch.int32) + 1
+    # corner case, if sequence_length < kernel_size, no compression for this sequence
+    y_seqlens[seqlens < kernel_size] = 0
     y_cu_seqlens = torch.cat(
         [
             torch.zeros(1, dtype=torch.int32, device="cuda"),
