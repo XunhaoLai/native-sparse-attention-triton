@@ -1,6 +1,6 @@
 <div align="center">
 
-Native Sparse Attention Triton
+# Native Sparse Attention Triton
 
 </div>
 
