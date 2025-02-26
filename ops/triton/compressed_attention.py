@@ -1084,8 +1084,8 @@ def compressed_attention(
     topk: int,
     cu_seqlens_q: torch.Tensor,
     cu_seqlens_k: torch.Tensor,
-    max_seqlen_q: int,
-    max_seqlen_k: int,
+    max_seqlen_q: int = None,
+    max_seqlen_k: int = None,
     sm_scale: float = None,
     init_blocks: int = 1,
     local_blocks: int = 2,
@@ -1111,6 +1111,10 @@ def compressed_attention(
     Returns:
         Tuple[torch.Tensor, torch.Tensor]: attention output and topk_idx used in topk_sparse_attention
     """
+    if max_seqlen_q is None:
+        max_seqlen_q = (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item()
+    if max_seqlen_k is None:
+        max_seqlen_k = (cu_seqlens_k[1:] - cu_seqlens_k[:-1]).max().item()
     attn_output, lse = CompressedAttention.apply(
         q,
         k,

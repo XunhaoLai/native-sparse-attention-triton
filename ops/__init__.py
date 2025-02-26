@@ -13,10 +13,18 @@
 # limitations under the License.
 from ops.triton.compressed_attention import compressed_attention
 from ops.triton.topk_sparse_attention import topk_sparse_attention
-from ops.torch.compress_key_value import conv_compress
+from ops.torch.compress_key_value import (
+    conv_compress,
+    avgpool_compress,
+    weightedpool_compress,
+    linear_compress,
+)
 
 __all__ = [
     "conv_compress",
     "compressed_attention",
     "topk_sparse_attention",
+    "avgpool_compress",
+    "weightedpool_compress",
+    "linear_compress",
 ]

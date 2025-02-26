@@ -12,7 +12,12 @@
 # See the License for the specific
 import torch
 import triton
-from ops.torch.compress_key_value import conv_compress
+from ops.torch.compress_key_value import (
+    conv_compress,
+    avgpool_compress,
+    weightedpool_compress,
+    linear_compress,
+)
 
 
 if __name__ == "__main__":
@@ -38,7 +43,7 @@ if __name__ == "__main__":
         .requires_grad_()
     )
     w = (
-        torch.zeros(num_heads * head_dim, head_dim, kernel_size)
+        torch.zeros(num_heads, kernel_size * head_dim, head_dim)
         .uniform_(-1, 1)
         .cuda()
         .bfloat16()
@@ -52,13 +57,17 @@ if __name__ == "__main__":
         .requires_grad_()
     )
 
-    y, y_cu_seqlens = conv_compress(x, w, cu_seqlens, kernel_size, kernel_stride, pe)
+    y, y_cu_seqlens = linear_compress(x, w, cu_seqlens, kernel_size, kernel_stride, pe)
 
     loss = (y * torch.randn_like(y)).mean()
     loss.backward()
 
     print(y.shape, y_cu_seqlens)
-    print(y.norm(), x.grad.norm(), w.grad.norm())
+    print(y.norm(), x.grad.norm())
+    print(
+        w.grad.norm() if w.grad is not None else None,
+        pe.grad.norm() if pe.grad is not None else None,
+    )
 
     # benchmark
     @triton.testing.perf_report(
@@ -77,7 +86,7 @@ if __name__ == "__main__":
     def benchmark(N, H, D, provider):
         K, S = 32, 16
         x = torch.zeros(N, H, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
-        w = torch.zeros(H * D, D, K, device="cuda", dtype=torch.bfloat16).uniform_(
+        w = torch.zeros(H, K * D, D, device="cuda", dtype=torch.bfloat16).uniform_(
             -1, 1
         )
         pe = torch.zeros(H, K, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
@@ -88,24 +97,24 @@ if __name__ == "__main__":
         cu_seqlens_b32 = (
             torch.LongTensor([N // 32 if i > 0 else 0 for i in range(33)]).int().cuda()
         )
-        cu_seqlens_b1 = cu_seqlens_b1.cumsum(0)
-        cu_seqlens_b8 = cu_seqlens_b8.cumsum(0)
-        cu_seqlens_b32 = cu_seqlens_b32.cumsum(0)
+        cu_seqlens_b1 = cu_seqlens_b1.cumsum(0).to(torch.int32)
+        cu_seqlens_b8 = cu_seqlens_b8.cumsum(0).to(torch.int32)
+        cu_seqlens_b32 = cu_seqlens_b32.cumsum(0).to(torch.int32)
 
         quantiles = [0.5, 0.2, 0.8]
         if provider == "batch1":
             ms, min_ms, max_ms = triton.testing.do_bench(
-                lambda: conv_compress(x, w, cu_seqlens_b1, K, S, pe),
+                lambda: linear_compress(x, w, cu_seqlens_b1, K, S, pe),
                 quantiles=quantiles,
             )
         if provider == "batch8":
             ms, min_ms, max_ms = triton.testing.do_bench(
-                lambda: conv_compress(x, w, cu_seqlens_b8, K, S, pe),
+                lambda: linear_compress(x, w, cu_seqlens_b8, K, S, pe),
                 quantiles=quantiles,
             )
         if provider == "batch32":
             ms, min_ms, max_ms = triton.testing.do_bench(
-                lambda: conv_compress(x, w, cu_seqlens_b32, K, S, pe),
+                lambda: linear_compress(x, w, cu_seqlens_b32, K, S, pe),
                 quantiles=quantiles,
             )
         return ms, min_ms, max_ms
