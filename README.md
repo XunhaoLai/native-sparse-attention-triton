@@ -1,4 +1,8 @@
-# Native Sparse Attention Triton
+<div align="center">
+
+Native Sparse Attention Triton
+
+</div>
 
 This repository implements the sparse attention mechanism introduced in the paper [Native Sparse Attention: Hardware-Aligned and Natively Trainable Sparse Attention](https://arxiv.org/abs/2502.11089) and provides an efficient training implementation based on [Triton](https://github.com/triton-lang/triton).
 
@@ -24,33 +28,41 @@ The `ops` module has implemented several functions required for native sparse at
 You can import those functions from the `ops` module:
 
 ```python
-from ops import (
-    conv_compress,
-    compressed_attention,
-    topk_sparse_attention
+import torch
+from ops import linear_compress, compressed_attention, topk_sparse_attention
+
+# input example
+num_q_heads = 64
+num_kv_heads = 4
+head_dim = 128
+kernel_size = 32
+kernel_stride = 16
+block_size = 64
+topk = 16
+cu_seqlens = torch.Tensor([0, 1024, 8192, 16384]).to(torch.int32).cuda()
+query = torch.randn(16384, num_q_heads, head_dim).to(torch.bfloat16).cuda()
+key = torch.randn(16384, num_kv_heads, head_dim).to(torch.bfloat16).cuda()
+value = torch.randn(16384, num_kv_heads, head_dim).to(torch.bfloat16).cuda()
+
+# weight example
+w = (
+    torch.randn(num_kv_heads, kernel_size * head_dim, head_dim)
+    .to(torch.bfloat16)
+    .cuda()
 )
+pe = torch.randn(num_kv_heads, kernel_size, head_dim).to(torch.bfloat16).cuda()
 
 # 1. key value compression
-compressed_key, compressed_cu_seqlens = conv_compress(
-    key, 
-    w, 
-    cu_seqlens, 
-    kernel_size, 
-    kernel_stride, 
-    pe
+compressed_key, compressed_cu_seqlens = linear_compress(
+    key, w, cu_seqlens, kernel_size, kernel_stride, pe
 )
-compressed_value, _ = conv_compress(
-    value, 
-    w, 
-    cu_seqlens, 
-    kernel_size, 
-    kernel_stride, 
-    None
+compressed_value, _ = linear_compress(
+    value, w, cu_seqlens, kernel_size, kernel_stride, None
 )
 
 # 2. attention between query and compressed key value
-compressed_attn_output, topk_idx = compressed_attention_torch(
-    q,
+compressed_attn_output, topk_idx = compressed_attention(
+    query,
     compressed_key,
     compressed_value,
     kernel_size,
@@ -59,20 +71,19 @@ compressed_attn_output, topk_idx = compressed_attention_torch(
     topk,
     cu_seqlens,
     compressed_cu_seqlens,
-    max_seqlen,
-    compressed_max_seqlen,
+    init_blocks=1,
+    local_blocks=2,
 )
 
 # 3. topk sparse attention
 sparse_attn_output = topk_sparse_attention(
-    query, 
-    key, 
-    value, 
-    topk_idx, 
-    block_size, 
-    cu_seqlens
+    query,
+    key,
+    value,
+    topk_idx,
+    block_size,
+    cu_seqlens,
 )
-
 ```
 
 ### Module
@@ -119,6 +130,8 @@ python test/test_nsa_w_rope.py
 ```
 
 ### Benchmarks
+
+Here are the speed benchmarks conducted on a single NVIDIA A100 GPU for the `topk_sparse_attention` function: 
 
 ```sh
 ** forward with block size 64 **:
