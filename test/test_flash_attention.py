@@ -13,7 +13,7 @@
 import torch
 import triton
 import math
-from ops.triton.flash_attention import (
+from native_sparse_attention.ops.triton.flash_attention import (
     flash_attention_varlen,
     _flash_attention_fwd,
     _flash_attention_bwd,

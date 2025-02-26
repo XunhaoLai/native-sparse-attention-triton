@@ -13,9 +13,13 @@
 # limitations under the License.
 import torch
 from flash_attn import flash_attn_varlen_func
-from ops import compressed_attention, topk_sparse_attention, conv_compress
+from native_sparse_attention.ops import (
+    compressed_attention,
+    topk_sparse_attention,
+    conv_compress,
+)
 from einops import rearrange
-from module.rope import RopeConfig, RotaryEmbedding
+from native_sparse_attention.module.rope import RopeConfig, RotaryEmbedding
 
 
 class NativeSparseAttentionNoRoPE(torch.nn.Module):

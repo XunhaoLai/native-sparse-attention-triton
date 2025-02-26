@@ -11,9 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific
 import torch
-from ops.torch.compressed_attention import compressed_attention_torch
-from ops.triton.compressed_attention import compressed_attention
-from ops.torch.compress_key_value import conv_compress
+from native_sparse_attention.ops.torch.compressed_attention import (
+    compressed_attention_torch,
+)
+from native_sparse_attention.ops.triton.compressed_attention import compressed_attention
+from native_sparse_attention.ops.torch.compress_key_value import conv_compress
 
 
 if __name__ == "__main__":

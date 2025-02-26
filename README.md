@@ -29,7 +29,7 @@ You can import those functions from the `ops` module:
 
 ```python
 import torch
-from ops import linear_compress, compressed_attention, topk_sparse_attention
+from native_sparse_attention.ops import linear_compress, compressed_attention, topk_sparse_attention
 
 # input example
 num_q_heads = 64
@@ -91,7 +91,7 @@ sparse_attn_output = topk_sparse_attention(
 The `modules` directory also provides implementations based on `torch.nn.module` for easy integration into models.
 
 ```python
-from modules import NativeSparseAttention, RopeConfig
+from native_sparse_attention.modules import NativeSparseAttention, RopeConfig
 
 NSA_Layer = NativeSparseAttentionNoRoPE(
     hidden_size=4096,

@@ -12,7 +12,7 @@
 # See the License for the specific
 import torch
 import triton
-from ops.torch.compress_key_value import (
+from native_sparse_attention.ops.torch.compress_key_value import (
     conv_compress,
     avgpool_compress,
     weightedpool_compress,

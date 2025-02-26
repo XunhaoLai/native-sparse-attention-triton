@@ -13,13 +13,18 @@
 import torch
 import triton
 import math
-from ops.torch.topk_sparse_attention import topk_sparse_attention_torch
-from ops.triton.topk_sparse_attention import (
+from native_sparse_attention.ops.torch.topk_sparse_attention import (
+    topk_sparse_attention_torch,
+)
+from native_sparse_attention.ops.triton.topk_sparse_attention import (
     topk_sparse_attention,
     _topk_sparse_attention_fwd,
     _topk_sparse_attention_bwd,
 )
-from ops.triton.flash_attention import _flash_attention_fwd, _flash_attention_bwd
+from native_sparse_attention.ops.triton.flash_attention import (
+    _flash_attention_fwd,
+    _flash_attention_bwd,
+)
 from flash_attn.flash_attn_interface import (
     _flash_attn_varlen_forward,
     _flash_attn_varlen_backward,

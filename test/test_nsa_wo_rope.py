@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific
 import torch
-from module import NativeSparseAttentionNoRoPE
+from native_sparse_attention.module import NativeSparseAttentionNoRoPE
 
 
 if __name__ == "__main__":

@@ -11,9 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from ops.triton.compressed_attention import compressed_attention
-from ops.triton.topk_sparse_attention import topk_sparse_attention
-from ops.torch.compress_key_value import (
+from native_sparse_attention.ops.triton.compressed_attention import compressed_attention
+from native_sparse_attention.ops.triton.topk_sparse_attention import (
+    topk_sparse_attention,
+)
+from native_sparse_attention.ops.torch.compress_key_value import (
     conv_compress,
     avgpool_compress,
     weightedpool_compress,
