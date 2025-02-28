@@ -896,7 +896,7 @@ def score_kernel(
         base=k_ptr + k_start * stride_kn + pid_kh * stride_kh,
         shape=(HEAD_DIM, k_len),
         strides=(stride_kd, stride_kn),
-        offsets=(0, 0),
+        offsets=(0, pid_k * BLOCK_SIZE_K),
         block_shape=(BLOCK_SIZE_D, BLOCK_SIZE_K),
         order=(0, 1),
     )
@@ -962,7 +962,9 @@ def _get_attention_score(
     assert q.dtype == torch.bfloat16 or q.dtype == torch.float16
     assert q.dtype == k.dtype
     assert cu_seqlens_q.dtype == torch.int32 and cu_seqlens_k.dtype == torch.int32
-    assert lse.dtype == torch.float32
+    assert (
+        lse.dtype == torch.float32
+    )  # lse here is log2(sum(exp(qk*scale))), not log(sum(exp(qk*scale)))
     # shape
     q_len, num_q_heads, head_dim = q.shape
     k_len, num_k_heads, head_dim = k.shape
@@ -1084,8 +1086,8 @@ def compressed_attention(
     topk: int,
     cu_seqlens_q: torch.Tensor,
     cu_seqlens_k: torch.Tensor,
-    max_seqlen_q: int = None,
-    max_seqlen_k: int = None,
+    max_seqlen_q: int,
+    max_seqlen_k: int,
     sm_scale: float = None,
     init_blocks: int = 1,
     local_blocks: int = 2,
@@ -1127,6 +1129,7 @@ def compressed_attention(
         max_seqlen_k,
         sm_scale,
     )
+    assert topk >= init_blocks + local_blocks
     with torch.no_grad():
         # recompute score
         score = _get_attention_score(

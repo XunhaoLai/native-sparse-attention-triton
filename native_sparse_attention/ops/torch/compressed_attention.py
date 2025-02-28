@@ -140,7 +140,7 @@ def compressed_attention_torch(
     # query from beginning of the sequence can't attend to any compressed key
     qk = qk.softmax(dim=-1, dtype=torch.float32)
     qk = qk.nan_to_num(0)
-    attn = torch.einsum(
+    attn_output = torch.einsum(
         "hqk,khd->qhd", qk.to(v.dtype), v.repeat_interleave(num_share_q_heads, 1)
     )
     with torch.no_grad():
@@ -153,24 +153,19 @@ def compressed_attention_torch(
             dtype=torch.float32,
             device=q.device,
         )
+        qk = rearrange(qk, "(h g) q k -> h g q k", h=num_k_heads).sum(1)
         for b in range(batch_size):
             score[
                 :,
                 cu_seqlens_q[b] : cu_seqlens_q[b + 1],
                 : cu_seqlens_k[b + 1] - cu_seqlens_k[b],
-            ] = rearrange(
-                qk[
-                    :,
-                    cu_seqlens_q[b] : cu_seqlens_q[b + 1],
-                    cu_seqlens_k[b] : cu_seqlens_k[b + 1],
-                ],
-                "(h g) q k -> h g q k",
-                h=num_k_heads,
-            ).sum(
-                1
-            )
-        # transform to block score
-        block_socre = transform_score(
+            ] = qk[
+                :,
+                cu_seqlens_q[b] : cu_seqlens_q[b + 1],
+                cu_seqlens_k[b] : cu_seqlens_k[b + 1],
+            ]
+        # transform score to block-wise score
+        score = transform_score(
             score,
             kernel_size,
             kernel_stride,
@@ -182,6 +177,7 @@ def compressed_attention_torch(
             init_blocks,
             local_blocks,
         )
+        # get topk
         batch_size = cu_seqlens_q.shape[0] - 1
         q_idx = torch.cat(
             [
@@ -191,6 +187,8 @@ def compressed_attention_torch(
             dim=0,
         )
         q_idx = q_idx // block_size
-        topk_idx = block_socre.topk(topk, dim=-1).indices.sort(-1).values
+        topk = min(topk, score.shape[-1])
+        topk_idx = score.topk(topk, dim=-1).indices.sort(-1).values
         topk_idx[topk_idx > q_idx[None, :, None]] = -1
-    return attn, topk_idx
+        topk_idx = topk_idx.to(torch.int32)
+    return attn_output, topk_idx

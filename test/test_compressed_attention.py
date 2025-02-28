@@ -25,8 +25,8 @@ if __name__ == "__main__":
     kernel_size = 32
     kernel_stride = 16
     block_size = 64
-    topk = 4
-    seqlens = torch.LongTensor([128, 1000, 4000]).int().cuda()
+    topk = 16
+    seqlens = torch.LongTensor([1000, 4000, 8192]).int().cuda()
     cu_seqlens = torch.cat(
         [
             torch.zeros(1, dtype=torch.int32, device="cuda"),
