@@ -82,7 +82,8 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
 
         # gate function
         self.gate = torch.nn.Sequential(
-            torch.nn.Linear(self.hidden_size, 3, bias=False), torch.nn.Sigmoid()
+            torch.nn.Linear(self.hidden_size, self.num_q_heads * 3, bias=False),
+            torch.nn.Sigmoid(),
         )
 
         # init parameters
@@ -163,10 +164,11 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
 
         # gate average
         gate = self.gate(x)
+        gate = rearrange(gate, "n (h g) -> n h g", g=3)
         attn_output = (
-            gate[:, 0:1, None] * compressed_attn_output
-            + gate[:, 1:2, None] * sparse_attn_output
-            + gate[:, 2:3, None] * sliding_attn_output
+            gate[..., 0:1] * compressed_attn_output
+            + gate[..., 1:2] * sparse_attn_output
+            + gate[..., 2:3] * sliding_attn_output
         )
 
         # rearrange and output proj
@@ -238,7 +240,8 @@ class NativeSparseAttention(torch.nn.Module):
 
         # gate function
         self.gate = torch.nn.Sequential(
-            torch.nn.Linear(self.hidden_size, 3, bias=False), torch.nn.Sigmoid()
+            torch.nn.Linear(self.hidden_size, self.num_q_heads * 3, bias=False),
+            torch.nn.Sigmoid(),
         )
 
         # rope
@@ -333,10 +336,11 @@ class NativeSparseAttention(torch.nn.Module):
 
         # gate average
         gate = self.gate(x)
+        gate = rearrange(gate, "n (h g) -> n h g", g=3)
         attn_output = (
-            gate[:, 0:1, None] * compressed_attn_output
-            + gate[:, 1:2, None] * sparse_attn_output
-            + gate[:, 2:3, None] * sliding_attn_output
+            gate[..., 0:1] * compressed_attn_output
+            + gate[..., 1:2] * sparse_attn_output
+            + gate[..., 2:3] * sliding_attn_output
         )
 
         # rearrange and output proj
