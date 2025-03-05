@@ -151,6 +151,17 @@ Here are the speed benchmarks conducted on a single NVIDIA A100 GPU for the `top
 4  32768.0  114.074753    384.978882    11.771808     18.923136
 ```
 
+Here comes another speed benchmark for testing `compressed_attention` function:
+```sh
+** forward speed for compressed attention (kernel 32 stride 16) **:
+         N      Flash  Triton-Flash  Compressed  Compressed-wo-Score
+0   2048.0   0.245216      0.333344    0.702752             0.081600
+1   4096.0   0.760288      1.129856    0.792752             0.182816
+2   8192.0   2.745728      4.138080    1.719584             0.470144
+3  16384.0  10.412096     15.776016    5.314288             1.443296
+4  32768.0  40.484608     61.347775   17.406656             4.967680
+```
+
 ## Contributing
 Contributions are welcome! Please open an issue to discuss major changes.
 
