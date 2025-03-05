@@ -1,4 +1,4 @@
-# Copyright 2025 Xunhao Lai.
+# Copyright 2025 Xunhao Lai & Jianqiao Lu.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ from collections import Counter
 import torch
 import triton
 import triton.language as tl
+import warnings
 
 
 @triton.jit
@@ -1129,6 +1130,12 @@ def compressed_attention(
         max_seqlen_k,
         sm_scale,
     )
+
+    # do not select topk index
+    if topk <= 0:
+        warnings.warn("topk <= 0, returned topk_idx will be None")
+        return attn_output, None
+
     assert topk >= init_blocks + local_blocks
     with torch.no_grad():
         # recompute score

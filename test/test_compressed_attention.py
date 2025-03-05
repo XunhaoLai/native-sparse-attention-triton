@@ -1,4 +1,4 @@
-# Copyright 2025 Xunhao Lai.
+# Copyright 2025 Xunhao Lai & Jianqiao Lu.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,11 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific
 import torch
+import triton
+import math
 from native_sparse_attention.ops.torch.compressed_attention import (
     compressed_attention_torch,
 )
 from native_sparse_attention.ops.triton.compressed_attention import compressed_attention
-from native_sparse_attention.ops.torch.compress_key_value import conv_compress
+from native_sparse_attention.ops.torch.compress_key_value import (
+    conv_compress,
+    avgpool_compress,
+)
+from native_sparse_attention.ops.triton.flash_attention import flash_attention_varlen
+from flash_attn import flash_attn_varlen_func
 
 
 if __name__ == "__main__":
@@ -136,3 +143,101 @@ if __name__ == "__main__":
             all_num += len(s)
             err_num += len(s) - len(s1 & s)
     print("Topk Idx Error Rate:", err_num / all_num)
+
+    # benchmark
+    @triton.testing.perf_report(
+        triton.testing.Benchmark(
+            x_names=["N"],
+            x_vals=[1024 * 2**i for i in range(1, 6)],
+            line_arg="provider",
+            line_vals=[
+                "flash",
+                "triton-flash",
+                "triton-compressed",
+                "triton-compressed-wo-score",
+            ],
+            line_names=[
+                "Flash",
+                "Triton-Flash",
+                "Compressed",
+                "Compressed-wo-Score",
+            ],
+            styles=[("green", "-"), ("green", "--"), ("blue", "-"), ("blue", "--")],
+            ylabel="ms",
+            plot_name="** forward speed for compressed attention (kernel 32 stride 16) **",
+            args={"H": 32, "D": 128},
+        )
+    )
+    def benchmark(N, H, D, provider):
+        q = torch.randn((N, H, D), device="cuda", dtype=torch.bfloat16)
+        k = torch.randn((N, H // 16, D), device="cuda", dtype=torch.bfloat16)
+        v = torch.randn((N, H // 16, D), device="cuda", dtype=torch.bfloat16)
+        cu_seqlens = torch.tensor([0, N], device="cuda", dtype=torch.int32)
+        sm_scale = 1 / math.sqrt(D)
+        com_k, com_cu_seqlens = avgpool_compress(k, None, cu_seqlens, 32, 16, None)
+        com_v, com_cu_seqlens = avgpool_compress(v, None, cu_seqlens, 32, 16, None)
+        M = (com_cu_seqlens[1:] - com_cu_seqlens[:-1]).max().item()
+
+        quantiles = [0.5, 0.2, 0.8]
+        if provider == "flash":
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: flash_attn_varlen_func(
+                    q,
+                    k,
+                    v,
+                    cu_seqlens,
+                    cu_seqlens,
+                    N,
+                    N,
+                    dropout_p=0.0,
+                    causal=True,
+                    softmax_scale=sm_scale,
+                ),
+                quantiles=quantiles,
+            )
+        if provider == "triton-flash":
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: flash_attention_varlen(
+                    q, k, v, cu_seqlens, cu_seqlens, N, N, True, sm_scale
+                ),
+                quantiles=quantiles,
+            )
+        if provider == "triton-compressed":
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: compressed_attention(
+                    q,
+                    com_k,
+                    com_v,
+                    32,
+                    16,
+                    64,
+                    16,
+                    cu_seqlens,
+                    com_cu_seqlens,
+                    N,
+                    M,
+                    sm_scale,
+                ),
+                quantiles=quantiles,
+            )
+        if provider == "triton-compressed-wo-score":
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: compressed_attention(
+                    q,
+                    com_k,
+                    com_v,
+                    32,
+                    16,
+                    64,
+                    -1,
+                    cu_seqlens,
+                    com_cu_seqlens,
+                    N,
+                    M,
+                    sm_scale,
+                ),
+                quantiles=quantiles,
+            )
+        return ms, min_ms, max_ms
+
+    benchmark.run(show_plots=True, print_data=True)
