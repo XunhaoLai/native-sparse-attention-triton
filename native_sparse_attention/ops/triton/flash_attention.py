@@ -17,6 +17,10 @@ from typing import Any, Optional
 import torch
 import triton
 import triton.language as tl
+from native_sparse_attention.ops.triton.utils import is_hopper_gpu
+
+
+IS_HOPPER = is_hopper_gpu()
 
 
 @triton.jit
@@ -688,8 +692,12 @@ def _flash_attention_bwd(
     )
     num_warps = 4 if head_dim <= 64 else 8
     num_stages = 3
-    BLOCK_SIZE_Q = 64
-    BLOCK_SIZE_K = 128
+    if IS_HOPPER:
+        BLOCK_SIZE_Q = 32
+        BLOCK_SIZE_K = 64
+    else:
+        BLOCK_SIZE_Q = 64
+        BLOCK_SIZE_K = 128
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
     backward_dkdv[grid](
         q,
