@@ -54,8 +54,12 @@ class RopeConfig:
         }
     )
     # useless, just for compatibility, please use head_dim instead
-    hidden_size: int = 4096
-    num_attention_heads: int = 32
+    hidden_size: int = 1
+    num_attention_heads: int = 1
+
+    def __post_init__(self):
+        self.num_attention_heads = 1
+        self.hidden_size = self.head_dim
 
 
 # copy and modify from modify from hugigngface transformers

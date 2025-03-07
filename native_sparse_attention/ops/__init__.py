@@ -15,10 +15,10 @@ from native_sparse_attention.ops.triton.compressed_attention import compressed_a
 from native_sparse_attention.ops.triton.topk_sparse_attention import (
     topk_sparse_attention,
 )
+from native_sparse_attention.ops.triton.weighted_pool import weightedpool_compress
 from native_sparse_attention.ops.torch.compress_key_value import (
     conv_compress,
     avgpool_compress,
-    weightedpool_compress,
     linear_compress,
 )
 

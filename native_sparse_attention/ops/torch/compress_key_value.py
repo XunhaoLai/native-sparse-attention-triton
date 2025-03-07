@@ -154,7 +154,7 @@ def avgpool_compress(
     return y, y_cu_seqlens
 
 
-def weightedpool_compress(
+def weightedpool_compress_torch(
     x: torch.Tensor,
     w: torch.Tensor,  # [num_heads, kernel_size]
     cu_seqlens,

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
-from typing import Any, Tuple
+from typing import Any, Tuple, Union
 from collections import Counter
 import torch
 import triton
@@ -1100,6 +1100,7 @@ def compressed_attention(
     sm_scale: float = None,
     init_blocks: int = 1,
     local_blocks: int = 2,
+    parallel_topk_compute: Union[str, bool] = "auto",
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Attention between query and compressed key and value. Compute attention output and topk block idx used in topk_sparse_attention.
 
@@ -1118,6 +1119,8 @@ def compressed_attention(
         sm_scale (float, optional): softmax scale. Defaults to None, means 1/sqrt(head_dim).
         init_blocks (int, optional): Number of init blocks for each query. Defaults to 1.
         local_blocks (int, optional): Number of local blocks for each query. Defaults to 2.
+        parallel_topk_compute (str, optional): Only set it to False when the sequence length is too long. This can avoid a current bug.
+            We'll fix this issue later. Defaults to auto, it will be set to False when the sequence length is greater than 32k and True otherwise.
 
     Returns:
         Tuple[torch.Tensor, torch.Tensor]: attention output and topk_idx used in topk_sparse_attention
@@ -1146,33 +1149,8 @@ def compressed_attention(
 
     assert topk >= init_blocks + local_blocks
     with torch.no_grad():
-        # recompute score
-        score = _get_attention_score(
-            q,
-            k,
-            lse,
-            kernel_size,
-            kernel_stride,
-            cu_seqlens_q,
-            cu_seqlens_k,
-            max_seqlen_q,
-            max_seqlen_k,
-            sm_scale,
-        )
-        # transform score to block-wise score
-        score = transform_score(
-            score,
-            kernel_size,
-            kernel_stride,
-            block_size,
-            cu_seqlens_q,
-            cu_seqlens_k,
-            max_seqlen_q,
-            max_seqlen_k,
-            init_blocks,
-            local_blocks,
-        )
-        # get topk
+        num_k_heads, num_q_heads = k.shape[1], q.shape[1]
+        num_shared_q_heads = num_q_heads // num_k_heads
         batch_size = cu_seqlens_q.shape[0] - 1
         q_idx = torch.cat(
             [
@@ -1182,8 +1160,78 @@ def compressed_attention(
             dim=0,
         )
         q_idx = q_idx // block_size
-        topk = min(topk, score.shape[-1])
-        topk_idx = score.topk(topk, dim=-1).indices.sort(-1).values
-        topk_idx[topk_idx > q_idx[None, :, None]] = -1
-        topk_idx = topk_idx.to(torch.int32)
+        # whether to use parallel version
+        if parallel_topk_compute == "auto":
+            parallel_topk_compute = cu_seqlens_q[-1] <= 32768
+        # parallel version
+        if parallel_topk_compute:
+            # recompute score
+            score = _get_attention_score(
+                q,
+                k,
+                lse,
+                kernel_size,
+                kernel_stride,
+                cu_seqlens_q,
+                cu_seqlens_k,
+                max_seqlen_q,
+                max_seqlen_k,
+                sm_scale,
+            )
+            # transform score to block-wise score
+            score = transform_score(
+                score,
+                kernel_size,
+                kernel_stride,
+                block_size,
+                cu_seqlens_q,
+                cu_seqlens_k,
+                max_seqlen_q,
+                max_seqlen_k,
+                init_blocks,
+                local_blocks,
+            )
+            # get topk
+            topk = min(topk, score.shape[-1])
+            topk_idx = score.topk(topk, dim=-1).indices.sort(-1).values
+            topk_idx[topk_idx > q_idx[None, :, None]] = -1
+            topk_idx = topk_idx.to(torch.int32)
+        # non parallel version, avoid some current bugs when sequence length is too long
+        # FIXME: need to fix later
+        else:
+            topk_idx_list = []
+            for h in range(num_k_heads):
+                # recompute score
+                score = _get_attention_score(
+                    q[:, h * num_shared_q_heads : (h + 1) * num_shared_q_heads],
+                    k[:, h : h + 1],
+                    lse[h * num_shared_q_heads : (h + 1) * num_shared_q_heads],
+                    kernel_size,
+                    kernel_stride,
+                    cu_seqlens_q,
+                    cu_seqlens_k,
+                    max_seqlen_q,
+                    max_seqlen_k,
+                    sm_scale,
+                )
+                # transform score to block-wise score
+                score = transform_score(
+                    score,
+                    kernel_size,
+                    kernel_stride,
+                    block_size,
+                    cu_seqlens_q,
+                    cu_seqlens_k,
+                    max_seqlen_q,
+                    max_seqlen_k,
+                    init_blocks,
+                    local_blocks,
+                )
+                # get topk
+                topk = min(topk, score.shape[-1])
+                topk_idx = score.topk(topk, dim=-1).indices.sort(-1).values
+                topk_idx[topk_idx > q_idx[None, :, None]] = -1
+                topk_idx = topk_idx.to(torch.int32)
+                topk_idx_list.append(topk_idx)
+            topk_idx = torch.cat(topk_idx_list, dim=0)
     return attn_output, topk_idx

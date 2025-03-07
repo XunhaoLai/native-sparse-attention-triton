@@ -16,7 +16,7 @@ from flash_attn import flash_attn_varlen_func
 from native_sparse_attention.ops import (
     compressed_attention,
     topk_sparse_attention,
-    conv_compress,
+    weightedpool_compress,
 )
 from einops import rearrange
 from native_sparse_attention.module.rope import RopeConfig, RotaryEmbedding
@@ -67,14 +67,10 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
 
         # nsa parameteres
         self.compress_key = torch.nn.Parameter(
-            torch.zeros(
-                self.num_kv_heads * self.head_dim, self.head_dim, self.kernel_size
-            )
+            torch.ones(self.num_kv_heads, self.kernel_size) / self.num_kv_heads
         )
         self.compress_value = torch.nn.Parameter(
-            torch.zeros(
-                self.num_kv_heads * self.head_dim, self.head_dim, self.kernel_size
-            )
+            torch.ones(self.num_kv_heads, self.kernel_size) / self.num_kv_heads
         )
         self.intra_block_pe = torch.nn.Parameter(
             torch.zeros(self.num_kv_heads, self.kernel_size, self.head_dim)
@@ -110,7 +106,7 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
         v = self.proj_v(x).view(-1, self.num_kv_heads, self.head_dim)
 
         # compressed attention
-        compressed_k, compressed_cu_seqlens = conv_compress(
+        compressed_k, compressed_cu_seqlens = weightedpool_compress(
             k,
             self.compress_key,
             cu_seqlens,
@@ -118,7 +114,7 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
             self.kernel_stride,
             self.intra_block_pe,
         )
-        compressed_v, _ = conv_compress(
+        compressed_v, _ = weightedpool_compress(
             v,
             self.compress_value,
             cu_seqlens,
@@ -208,6 +204,7 @@ class NativeSparseAttention(torch.nn.Module):
         self.local_blocks = local_blocks
         self.window_size = window_size
         self.rope_config = rope_config
+        assert self.head_dim == self.rope_config.head_dim
 
         # qkv proj and o proj
         self.proj_q = torch.nn.Linear(
@@ -225,14 +222,10 @@ class NativeSparseAttention(torch.nn.Module):
 
         # nsa parameteres
         self.compress_key = torch.nn.Parameter(
-            torch.zeros(
-                self.num_kv_heads * self.head_dim, self.head_dim, self.kernel_size
-            )
+            torch.ones(self.num_kv_heads, self.kernel_size) / self.num_kv_heads
         )
         self.compress_value = torch.nn.Parameter(
-            torch.zeros(
-                self.num_kv_heads * self.head_dim, self.head_dim, self.kernel_size
-            )
+            torch.ones(self.num_kv_heads, self.kernel_size) / self.num_kv_heads
         )
         self.intra_block_pe = torch.nn.Parameter(
             torch.zeros(self.num_kv_heads, self.kernel_size, self.head_dim)
@@ -271,7 +264,7 @@ class NativeSparseAttention(torch.nn.Module):
         v = self.proj_v(x).view(-1, self.num_kv_heads, self.head_dim)
 
         # compressed key and value before rope
-        compressed_k, compressed_cu_seqlens = conv_compress(
+        compressed_k, compressed_cu_seqlens = weightedpool_compress(
             k,
             self.compress_key,
             cu_seqlens,
@@ -279,7 +272,7 @@ class NativeSparseAttention(torch.nn.Module):
             self.kernel_stride,
             self.intra_block_pe,
         )
-        compressed_v, _ = conv_compress(
+        compressed_v, _ = weightedpool_compress(
             v,
             self.compress_value,
             cu_seqlens,
