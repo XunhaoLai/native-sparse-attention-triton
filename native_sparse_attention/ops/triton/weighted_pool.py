@@ -50,16 +50,17 @@ def sliding_pool_fwd_kernel(
     y_len = tl.load(y_cu_seqlens + pid_b + 1) - y_start
     if pid_k >= y_len:
         return
-    # load w
-    w_ptrs = tl.make_block_ptr(
-        base=w_ptr + pid_h * stride_wh,
-        shape=(kernel_size, 1),
-        strides=(stride_wk, 0),
-        offsets=(0, 0),
-        block_shape=(BLOCK_SIZE_K, 1),
-        order=(0, 1),
-    )
-    w = tl.load(w_ptrs, boundary_check=(0, 1), padding_option="zero")
+    if w_ptr is not None:
+        # load w
+        w_ptrs = tl.make_block_ptr(
+            base=w_ptr + pid_h * stride_wh,
+            shape=(kernel_size, 1),
+            strides=(stride_wk, 0),
+            offsets=(0, 0),
+            block_shape=(BLOCK_SIZE_K, 1),
+            order=(0, 1),
+        )
+        w = tl.load(w_ptrs, boundary_check=(0, 1), padding_option="zero")
     # load x
     x_ptrs = tl.make_block_ptr(
         base=x_ptr + x_start * stride_xn + pid_h * stride_xh,
@@ -71,7 +72,10 @@ def sliding_pool_fwd_kernel(
     )
     x = tl.load(x_ptrs, boundary_check=(0, 1), padding_option="zero")
     # compute y
-    y = tl.sum(x * w, axis=0)
+    if w_ptr is not None:
+        y = tl.sum(x * w, axis=0)
+    else:
+        y = tl.sum(x, axis=0) / kernel_size
     off_d = tl.arange(0, BLOCK_SIZE_D)
     tl.store(
         y_ptr + (y_start + pid_k) * stride_yn + pid_h * stride_yh + off_d * stride_yd,
@@ -122,9 +126,10 @@ def sliding_pool_dxdw_kernel(
     # offsets
     off_d = tl.arange(0, BLOCK_SIZE_D)
     off_k = tl.arange(0, BLOCK_SIZE_K)
-    # load w
-    w_ptrs = w_ptr + pid_h * stride_wh + off_k * stride_wk
-    w = tl.load(w_ptrs, mask=off_k < kernel_size, other=0)
+    if w_ptr is not None:
+        # load w
+        w_ptrs = w_ptr + pid_h * stride_wh + off_k * stride_wk
+        w = tl.load(w_ptrs, mask=off_k < kernel_size, other=0)
     # load x
     x_ptrs = tl.make_block_ptr(
         base=x_ptr + x_start * stride_xn + pid_h * stride_xh,
@@ -143,18 +148,21 @@ def sliding_pool_dxdw_kernel(
         + off_d * stride_dyd
     )
     dy = tl.load(dy_ptrs, mask=off_d < head_dim, other=0)
-    # compute dx, [1, D] x [K, 1] -> [K, D]
-    dx = dy[None, :] * w[:, None]
-    # compute dw, [D, 1] x [D, K] -> [D, K] -> [K]
-    dw = tl.sum(dy[:, None] * x, axis=0)
-    # store dw
-    dw_ptrs = (
-        dw_ptr
-        + pid_h * stride_dwh
-        + (y_start + pid_k) * stride_dwn
-        + off_k * stride_dwk
-    )
-    tl.store(dw_ptrs, dw.to(dw_ptr.dtype.element_ty), mask=off_k < kernel_size)
+    if w_ptr is not None:
+        # compute dx, [1, D] x [K, 1] -> [K, D]
+        dx = dy[None, :] * w[:, None]
+        # compute dw, [D, 1] x [D, K] -> [D, K] -> [K]
+        dw = tl.sum(dy[:, None] * x, axis=0)
+        # store dw
+        dw_ptrs = (
+            dw_ptr
+            + pid_h * stride_dwh
+            + (y_start + pid_k) * stride_dwn
+            + off_k * stride_dwk
+        )
+        tl.store(dw_ptrs, dw.to(dw_ptr.dtype.element_ty), mask=off_k < kernel_size)
+    else:
+        dx = dy[None, :] / kernel_size
     # store dx
     dx_ptrs = (
         dx_ptr
@@ -181,14 +189,16 @@ class SlidingWindowWeightedPool(torch.autograd.Function):
         kernel_stride: int,
     ):
         # dtype check
-        # assert x.dtype == torch.float16 or x.dtype == torch.bfloat16
-        assert x.dtype == w.dtype
+        assert x.dtype == torch.float16 or x.dtype == torch.bfloat16
+        if w is not None:
+            assert x.dtype == w.dtype
         assert cu_seqlens.dtype == torch.int32
         # shape check
         total_len, num_heads, head_dim = x.shape
         batch_size = cu_seqlens.shape[0] - 1
-        assert w.shape[0] == num_heads
-        assert w.shape[1] == kernel_size
+        if w is not None:
+            assert w.shape[0] == num_heads
+            assert w.shape[1] == kernel_size
         assert kernel_size % kernel_stride == 0
         assert kernel_size in {16, 32, 64, 128}
         # compute seqlens after compression
@@ -228,8 +238,8 @@ class SlidingWindowWeightedPool(torch.autograd.Function):
             y.stride(0),
             y.stride(1),
             y.stride(2),
-            w.stride(0),
-            w.stride(1),
+            w.stride(0) if w is not None else None,
+            w.stride(1) if w is not None else None,
             BLOCK_SIZE_K=BLOCK_SIZE_K,
             BLOCK_SIZE_D=BLOCK_SIZE_D,
         )
@@ -249,13 +259,14 @@ class SlidingWindowWeightedPool(torch.autograd.Function):
         num_heads = x.shape[1]
         # compute dx
         dx = torch.zeros_like(x, dtype=torch.float32)
-        dw = torch.zeros(
-            num_heads,
-            y_cu_seqlens[-1],
-            kernel_size,
-            dtype=torch.float32,
-            device=w.device,
-        )
+        if w is not None:
+            dw = torch.zeros(
+                num_heads,
+                y_cu_seqlens[-1],
+                kernel_size,
+                dtype=torch.float32,
+                device=w.device,
+            )
         BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
         BLOCK_SIZE_K = triton.next_power_of_2(kernel_size)
         grid = (batch_size, num_heads, y_seqlens.max().item())
@@ -264,7 +275,7 @@ class SlidingWindowWeightedPool(torch.autograd.Function):
             dx,
             dy,
             w,
-            dw,
+            dw if w is not None else None,
             cu_seqlens,
             y_cu_seqlens,
             head_dim,
@@ -279,16 +290,19 @@ class SlidingWindowWeightedPool(torch.autograd.Function):
             dy.stride(0),
             dy.stride(1),
             dy.stride(2),
-            w.stride(0),
-            w.stride(1),
-            dw.stride(0),
-            dw.stride(1),
-            dw.stride(2),
+            w.stride(0) if w is not None else None,
+            w.stride(1) if w is not None else None,
+            dw.stride(0) if w is not None else None,
+            dw.stride(1) if w is not None else None,
+            dw.stride(2) if w is not None else None,
             BLOCK_SIZE_K=BLOCK_SIZE_K,
             BLOCK_SIZE_D=BLOCK_SIZE_D,
         )
         dx = dx.to(x.dtype)
-        dw = dw.sum(1).to(w.dtype)
+        if w is None:
+            dw = None
+        else:
+            dw = dw.sum(1).to(w.dtype)
         return dx, dw, None, None, None
 
 
@@ -318,7 +332,41 @@ def weightedpool_compress(
     )
     # position embedding as a bias
     if pe is not None:
+        assert pe.dtype == x.dtype and pe.device == x.device
         bias = einsum(pe, w, "h k d, h k -> h d")
+        y = y + bias.unsqueeze(0)
+    return y, y_cu_seqlens
+
+
+def avgpool_compress(
+    x: torch.Tensor,  # [total_len, num_heads, head_dim]
+    w: torch.Tensor,  # don't need weight
+    cu_seqlens: torch.Tensor,
+    kernel_size: int,
+    kernel_stride: int,
+    pe: Optional[torch.Tensor] = None,
+):
+    """Compress key and value tensor with kernel_size and kernel_stride.
+
+    Args:
+        x (torch.Tensor): key_states or value_states, shape (total_len, num_heads, head_dim)
+        w (torch.Tensor): weight for each head, shape (num_heads, kernel_size)
+        cu_seqlens (_type_): shape [batch_size + 1], similar to cu_seqlens_q in flash_attn_func_varlen.
+        kernel_size (int): kernel_size, each (kernel_size, head_dim) blocks will be compressed to (1, head_dim)
+        kernel_stride (int): stride for each compress kernel
+        pe (Optional[torch.Tensor], optional): intra-block positional embedding with shape (num_heads, kernel_size, head_dim). Defaults to None.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: compressed states and corresponding cu_seqlens.
+    """
+    assert w is None, "don't need additional weight for avgpool"
+    y, y_cu_seqlens = SlidingWindowWeightedPool.apply(
+        x, w, cu_seqlens, kernel_size, kernel_stride
+    )
+    # position embedding as a bias
+    if pe is not None:
+        assert pe.dtype == x.dtype and pe.device == x.device
+        bias = torch.mean(pe, dim=1)
         y = y + bias.unsqueeze(0)
     return y, y_cu_seqlens
 

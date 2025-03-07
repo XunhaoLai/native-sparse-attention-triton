@@ -89,7 +89,7 @@ def conv_compress(
     return y, y_cu_seqlens
 
 
-def avgpool_compress(
+def avgpool_compress_torch(
     x: torch.Tensor,
     w: torch.Tensor,
     cu_seqlens,
@@ -290,7 +290,7 @@ def linear_compress(
     y = einsum(
         x,
         rearrange(w, "h (k d) D -> h k d D", k=kernel_size),
-        "b h n k d, h k d D -> b n h d",
+        "b h n k d, h k d D -> b n h D",
     )
     # only keep useful part
     y = torch.cat([y[i, : y_seqlens[i]] for i in range(batch_size)], dim=0)
