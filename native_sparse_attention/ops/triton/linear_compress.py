@@ -19,6 +19,7 @@ import triton
 import torch
 import triton.language as tl
 from einops import rearrange 
+import pdb
 
 
 @triton.jit
@@ -170,23 +171,23 @@ def linear_compress_bwd_paralleld_kernel(
         order=(2, 1, 0)
     )
 
-    dx_ptrs = tl.make_block_ptr(
-        base=DX + x_start * stride_dxn + pid_h * stride_dxh,
-        shape=(x_len, HEADd_DIM),
-        strides=(stride_dxn, stride_dxd),
-        offsets=(pid_k * KERNEL_STRIDE, 0),
-        block_shape=(BLOCK_KERNEL_SIZE, BLOCK_HEADd_DIM),
-        order=(1, 0)
-    )
+    # dx_ptrs = tl.make_block_ptr(
+    #     base=DX + x_start * stride_dxn + pid_h * stride_dxh,
+    #     shape=(x_len, HEADd_DIM),
+    #     strides=(stride_dxn, stride_dxd),
+    #     offsets=(pid_k * KERNEL_STRIDE, 0),
+    #     block_shape=(BLOCK_KERNEL_SIZE, BLOCK_HEADd_DIM),
+    #     order=(1, 0)
+    # )
 
-    dw_ptrs = tl.make_block_ptr(
-        base=DW + pid_h * stride_dwh,
-        shape=(KERNEL_SIZE, HEADd_DIM, HEADD_DIM),
-        strides=(stride_dwk, stride_dwd, stride_dwD),
-        offsets=(0, 0, pid_D * BLOCK_HEADD_DIM),
-        block_shape=(BLOCK_KERNEL_SIZE, BLOCK_HEADd_DIM, BLOCK_HEADD_DIM),
-        order=(2, 1, 0)
-    )
+    # dw_ptrs = tl.make_block_ptr(
+    #     base=DW + pid_h * stride_dwh,
+    #     shape=(KERNEL_SIZE, HEADd_DIM, HEADD_DIM),
+    #     strides=(stride_dwk, stride_dwd, stride_dwD),
+    #     offsets=(0, 0, pid_D * BLOCK_HEADD_DIM),
+    #     block_shape=(BLOCK_KERNEL_SIZE, BLOCK_HEADd_DIM, BLOCK_HEADD_DIM),
+    #     order=(2, 1, 0)
+    # )
 
     dy_ptrs = tl.make_block_ptr(
         base=DY + (y_start + pid_k) * stride_dyn + pid_h * stride_dyh,
@@ -197,7 +198,7 @@ def linear_compress_bwd_paralleld_kernel(
         order=(0,)
     )
 
-    dy =  tl.load(dy_ptrs, boundary_check=(0,), padding="zero" )
+    dy =  tl.load(dy_ptrs, boundary_check=(0,), padding_option="zero" )
     # dy : [D, ]
 
     # cal dx, start
@@ -207,15 +208,45 @@ def linear_compress_bwd_paralleld_kernel(
     dx = tl.sum(dy[None, None, :] * w, axis = 2)
     # dx: [k, d]
 
-    tl.atomic_add(dx_ptrs, dx, boundary_check=(0, 1), padding_option="zero")
+    off_k = tl.arange(0, BLOCK_KERNEL_SIZE)
+    off_d = tl.arange(0, BLOCK_HEADd_DIM)
+    off_D = tl.arange(0, BLOCK_HEADD_DIM)
+
+    dx_ptrs = ( 
+        DX 
+        + pid_h * stride_dxh 
+        + (x_start + pid_k * KERNEL_STRIDE + off_k[:, None]) * stride_dxn
+        + off_d[None, :] * stride_dxd
+    )
+    tl.atomic_add(
+        dx_ptrs, dx.to(dx_ptrs.dtype.element_ty), 
+        mask= (
+            (off_k < x_len - pid_k * KERNEL_STRIDE)[:, None]
+            & (off_d < HEADD_DIM)[None, :]
+        ),
+    )
     # cal dx, end
 
     # cal dw, start
     x = tl.load(x_ptrs, boundary_check=(0, 1), padding_option="zero")
     # x : [k, d]
 
-    dw = x[:, :, None] * w
-    tl.store(dw_ptrs, dw, boundary_check=(0, 1, 2), padding_option="zero")
+    dw_ptrs = ( 
+        DW 
+        + pid_h * stride_dwh 
+        + off_k[:, None, None] * stride_dwk
+        + off_d[None, :, None] * stride_dwd
+        + (pid_D * BLOCK_HEADD_DIM + off_D[None, None, :]) * stride_dwD
+    )
+    dw = x[:, :, None] * dy[None, None, :]
+    tl.atomic_add(
+        dw_ptrs, dw.to(dw_ptrs.dtype.element_ty),
+        mask = (
+            (off_k < KERNEL_SIZE)[:, None, None]
+            & (off_d < BLOCK_HEADd_DIM)[None, :, None]
+            & (pid_D * BLOCK_HEADD_DIM + off_D < HEADD_DIM)[None, None, :]
+        ),
+    )
 
 
 class LinearCompress(torch.autograd.Function):
@@ -324,7 +355,7 @@ class LinearCompress(torch.autograd.Function):
         ctx.kernel_size = kernel_size
         ctx.kernel_stride = kernel_stride
         ctx.block_kernel_size = block_kernel_size
-        ctx.block_head = block_head_dim
+        ctx.block_headd_dim = block_head_dim
         ctx.block_headD_dim = block_headD_dim
         return y, y_cu_seqlens
 
@@ -337,10 +368,10 @@ class LinearCompress(torch.autograd.Function):
         batch_size = cu_seqlens.shape[0] - 1
 
         dx = torch.zeros(
-            cu_seqlens[-1], num_heads, head_dim, dtype=x.dtype, device=x.device)
+            cu_seqlens[-1], num_heads, head_dim, dtype=x.dtype, device=x.device).contiguous()
 
         dw = torch.zeros(
-            num_heads, kernel_size, head_dim, head_dim, dtype=x.dtype, device=x.device)
+            num_heads, kernel_size, head_dim, head_dim, dtype=x.dtype, device=x.device).contiguous()
 
         grid = lambda META: (
             batch_size * num_heads,
@@ -379,10 +410,10 @@ class LinearCompress(torch.autograd.Function):
             head_dim,
             head_dim,
             ctx.block_kernel_size,
-            ctx.block_head_dim,
+            ctx.block_headd_dim,
             ctx.block_headD_dim,
         )
-        return dw, dw
+        return dx,  rearrange(dw, "n k d D -> n (k d) D"), None, None, None, None
 
 
 def linear_compress(
