@@ -17,6 +17,7 @@ from einops import einsum
 import torch
 import triton
 import triton.language as tl
+from native_sparse_attention.ops.triton.utils import get_compressed_seqlens
 
 
 @triton.jit
@@ -203,18 +204,9 @@ class SlidingWindowWeightedPool(torch.autograd.Function):
         assert kernel_size in {16, 32, 64, 128}
         # compute seqlens after compression
         seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
-        y_seqlens = (
-            torch.floor((seqlens - kernel_size) / kernel_stride).to(torch.int32) + 1
+        y_seqlens, y_cu_seqlens = get_compressed_seqlens(
+            cu_seqlens, kernel_size, kernel_stride
         )
-        # corner case, if sequence_length < kernel_size, no compression for this sequence
-        y_seqlens[seqlens < kernel_size] = 0
-        y_cu_seqlens = torch.cat(
-            [
-                torch.zeros(1, dtype=torch.int32, device="cuda"),
-                torch.cumsum(y_seqlens, dim=0),
-            ],
-            dim=0,
-        ).to(torch.int32)
         # output buffer
         y = torch.zeros(
             y_cu_seqlens[-1], num_heads, head_dim, dtype=x.dtype, device=x.device
