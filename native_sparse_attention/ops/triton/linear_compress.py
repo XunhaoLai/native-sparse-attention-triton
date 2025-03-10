@@ -97,7 +97,7 @@ def linear_compress_fwd_paralleld_kernel(
     # w: [k, d, D]
 
     y_d = tl.sum(tl.sum(x[:, :, None] * w, axis=0), axis = 0)  # Sum over k and d
-    y_d = tl.reshape(y_d, (BLOCK_HEADD_DIM,))
+    # y_d = tl.reshape(y_d, (BLOCK_HEADD_DIM,))
     #  y_d : [D]
 
     tl.store(y_ptrs, y_d.to(y_ptrs.dtype.element_ty), boundary_check=(0,))
@@ -243,7 +243,7 @@ def linear_compress_bwd_paralleld_kernel(
         dw_ptrs, dw.to(dw_ptrs.dtype.element_ty),
         mask = (
             (off_k < KERNEL_SIZE)[:, None, None]
-            & (off_d < BLOCK_HEADd_DIM)[None, :, None]
+            & (off_d < HEADd_DIM)[None, :, None]
             & (pid_D * BLOCK_HEADD_DIM + off_D < HEADD_DIM)[None, None, :]
         ),
     )
@@ -351,7 +351,10 @@ class LinearCompress(torch.autograd.Function):
             y = y + bias.unsqueeze(0)
 
         # save for backward
-        ctx.save_for_backward(x, w, pe, cu_seqlens, y_seqlens)
+        # save tensor
+        ctx.save_for_backward(x, w, pe, cu_seqlens, y_seqlens, y_cu_seqlens)
+
+        # save value
         ctx.kernel_size = kernel_size
         ctx.kernel_stride = kernel_stride
         ctx.block_kernel_size = block_kernel_size
@@ -361,17 +364,21 @@ class LinearCompress(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dy: torch.Tensor, *args) -> Any:
-        x, w, pe, cu_seqlens, y_seqlens = ctx.saved_tensors
+        x, w, pe, cu_seqlens, y_seqlens, y_cu_seqlens = ctx.saved_tensors
         kernel_size = ctx.kernel_size
         kernel_stride = ctx.kernel_stride
+        block_kernel_size = ctx.block_kernel_size
+        block_head_dim = ctx.block_headd_dim
+        block_headD_dim = ctx.block_headD_dim
+
         total_len, num_heads, head_dim = x.shape
         batch_size = cu_seqlens.shape[0] - 1
 
         dx = torch.zeros(
-            cu_seqlens[-1], num_heads, head_dim, dtype=x.dtype, device=x.device).contiguous()
+            cu_seqlens[-1], num_heads, head_dim, dtype=torch.float32, device=x.device)
 
         dw = torch.zeros(
-            num_heads, kernel_size, head_dim, head_dim, dtype=x.dtype, device=x.device).contiguous()
+            num_heads, kernel_size, head_dim, head_dim, dtype=torch.float32, device=x.device)
 
         grid = lambda META: (
             batch_size * num_heads,
@@ -386,7 +393,7 @@ class LinearCompress(torch.autograd.Function):
             x,
             w,
             cu_seqlens,
-            y_seqlens,
+            y_cu_seqlens,
             x.stride(0),
             x.stride(1),
             x.stride(2),
@@ -409,11 +416,11 @@ class LinearCompress(torch.autograd.Function):
             kernel_stride,
             head_dim,
             head_dim,
-            ctx.block_kernel_size,
-            ctx.block_headd_dim,
-            ctx.block_headD_dim,
+            block_kernel_size,
+            block_head_dim,
+            block_headD_dim,
         )
-        return dx,  rearrange(dw, "n k d D -> n (k d) D"), None, None, None, None
+        return dx.to(x.dtype),  rearrange(dw.to(x.dtype), "n k d D -> n (k d) D"), None, None, None, None
 
 
 def linear_compress(
@@ -428,3 +435,18 @@ def linear_compress(
     Wrapper function for LinearCompress.apply
     """
     return LinearCompress.apply(x, w, cu_seqlens, kernel_size, kernel_stride, pe)
+
+
+if __name__ == "__main__":
+    torch.set_default_dtype(torch.float64)
+    x = torch.randn(128, 4, 64, requires_grad=True, device="cuda", dtype=torch.float16)
+    w = torch.randn(4, 16 * 64, 64, requires_grad=True, device="cuda", dtype=torch.float16)
+    cu_seqlens = torch.tensor([0, 32, 64, 96, 128], dtype=torch.int32, device="cuda")
+    kernel_size = 16
+    kernel_stride = 4
+    pe = None
+    torch.autograd.gradcheck(
+        LinearCompress.apply,
+        (x, w, cu_seqlens, kernel_size, kernel_stride, pe),
+        fast_mode=False
+    )

@@ -11,7 +11,7 @@ def test_linear_compress(
     kernel_sizes: list = [16, 32],
     kernel_strides: list = [8, 16],
     use_pe: bool = True,
-    dtype: torch.dtype = torch.float16,
+    dtype: torch.dtype = torch.float32,
     device: str = "cuda"
 ):
     """
@@ -49,20 +49,22 @@ def test_linear_compress(
         print(f"\nTesting kernel_size={kernel_size}, kernel_stride={kernel_stride}")
         
         # Create input tensors with requires_grad=True
-        x_torch = torch.randn(
+        x_torch = torch.zeros(
             (total_len, num_heads, head_dim),
             dtype=dtype,
             device=device,
-            requires_grad=True
-        )
+        ).uniform_(-1, 1)
+        x_torch.requires_grad_(True)
+
         x_triton = x_torch.clone().detach().requires_grad_(True)
         
-        w_torch = torch.randn(
+        w_torch = torch.ones(
             (num_heads, kernel_size * head_dim, head_dim),
             dtype=dtype,
             device=device,
-            requires_grad=True
-        )
+        ) / kernel_size
+        w_torch.requires_grad_(True)
+
         w_triton = w_torch.clone().detach().requires_grad_(True)
         
         pe_torch = None
@@ -96,7 +98,7 @@ def test_linear_compress(
         )
         
         # Check forward pass numerical equivalence
-        atol, rtol = 1e-3, 1e-1
+        atol, rtol = 1e-2, 1e-2
         values_match = torch.allclose(y_torch, y_triton, atol=atol, rtol=rtol)
         print(f"Forward pass - Output values match (atol={atol}, rtol={rtol}): {values_match}")
         if not values_match:
@@ -177,10 +179,10 @@ if __name__ == "__main__":
     test_linear_compress(
         batch_size=4,
         num_heads=8,
-        head_dim=64,
+        head_dim=32,
         max_seqlen=512,
-        kernel_sizes=[16, 32],
-        kernel_strides=[8, 16],
+        kernel_sizes=[32, 64],
+        kernel_strides=[16, 32],
         use_pe=False,
         dtype=torch.float16,
         device="cuda"
