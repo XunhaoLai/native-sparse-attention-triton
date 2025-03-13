@@ -51,7 +51,7 @@ def test_linear_compress(
     torch.manual_seed(42)
 
     # Generate random sequence lengths for each batch
-    
+
     seqlens = torch.randint(
         low=kernel_sizes[0],  # minimum length should be at least kernel_size
         high=max_seqlen + 1,
@@ -198,10 +198,10 @@ if __name__ == "__main__":
     test_linear_compress(
         batch_size=16,
         num_heads=8,
-        head_dim=96,
-        max_seqlen=99,
-        kernel_sizes=[64],
-        kernel_strides=[32],
+        head_dim=128,
+        max_seqlen=2048,
+        kernel_sizes=[32],
+        kernel_strides=[16],
         use_pe=False,
         dtype=torch.float16,
         device="cuda",
@@ -265,7 +265,9 @@ if __name__ == "__main__":
         # Input tensors
         x = torch.zeros(N, H, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
         x.requires_grad = True
-        w = torch.zeros(H, K * D, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
+        w = torch.zeros(H, K * D, D, device="cuda", dtype=torch.bfloat16).uniform_(
+            -1, 1
+        )
         w.requires_grad = True
         pe = torch.zeros(H, K, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
         cu_seqlens_b32 = (
@@ -274,7 +276,7 @@ if __name__ == "__main__":
         cu_seqlens_b32 = cu_seqlens_b32.cumsum(0).to(torch.int32)
 
         quantiles = [0.5, 0.2, 0.8]
-        
+
         def fwd_bwd():
             if provider == "torch":
                 out, _ = linear_compress_torch(x, w, cu_seqlens_b32, K, S, pe)
@@ -285,6 +287,5 @@ if __name__ == "__main__":
 
         ms, min_ms, max_ms = triton.testing.do_bench(fwd_bwd, quantiles=quantiles)
         return ms, min_ms, max_ms
-
 
     benchmark_fwdbwd.run(show_plots=True, print_data=True)
