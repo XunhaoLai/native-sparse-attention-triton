@@ -1,4 +1,4 @@
-# Copyright 2025 Xunhao Lai.
+# Copyright 2025 Xunhao Lai & Jianqiao Lu.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,3 +16,10 @@ from native_sparse_attention.module.native_sparse_attention import (
     NativeSparseAttention,
 )
 from native_sparse_attention.module.rope import RotaryEmbedding, RopeConfig
+
+__all__ = [
+    "NativeSparseAttentionNoRoPE",
+    "NativeSparseAttention",
+    "RotaryEmbedding",
+    "RopeConfig",
+]

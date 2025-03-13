@@ -17,10 +17,7 @@ from native_sparse_attention.ops.torch.compressed_attention import (
     compressed_attention_torch,
 )
 from native_sparse_attention.ops.triton.compressed_attention import compressed_attention
-from native_sparse_attention.ops.torch.compress_key_value import (
-    conv_compress,
-    avgpool_compress,
-)
+from native_sparse_attention.ops import conv_compress, avgpool_compress
 from native_sparse_attention.ops.triton.flash_attention import flash_attention_varlen
 from flash_attn import flash_attn_varlen_func
 
