@@ -500,8 +500,18 @@ def linear_compress(
     kernel_stride: int,
     pe: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Wrapper function for LinearCompress.apply
+    """Compress key and value tensor with kernel_size and kernel_stride. Similar to conv_compress.
+
+    Args:
+        x (torch.Tensor): key_states or value_states, shape (total_len, num_heads, head_dim)
+        w (torch.Tensor): weight for each head, shape (num_heads, kernel_size * head_dim, head_dim)
+        cu_seqlens (_type_): shape [batch_size + 1], similar to cu_seqlens_q in flash_attn_func_varlen.
+        kernel_size (int): kernel_size, each (kernel_size, head_dim) blocks will be compressed to (1, head_dim)
+        kernel_stride (int): stride for each compress kernel
+        pe (Optional[torch.Tensor], optional): intra-block positional embedding with shape (num_heads, kernel_size, head_dim). Defaults to None.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: compressed states and corresponding cu_seqlens.
     """
     y, y_cu_seqlens = LinearCompress.apply(x, w, cu_seqlens, kernel_size, kernel_stride)
     # position embedding as a bias

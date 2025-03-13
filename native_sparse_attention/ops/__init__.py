@@ -19,10 +19,8 @@ from native_sparse_attention.ops.triton.weighted_pool import (
     weightedpool_compress,
     avgpool_compress,
 )
-from native_sparse_attention.ops.torch.compress_key_value import (
-    conv_compress,
-    linear_compress,
-)
+from native_sparse_attention.ops.torch.compress_key_value import conv_compress
+from native_sparse_attention.ops.triton.linear_compress import linear_compress
 
 __all__ = [
     "conv_compress",

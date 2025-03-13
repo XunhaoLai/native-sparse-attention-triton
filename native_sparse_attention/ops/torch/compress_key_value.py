@@ -226,7 +226,7 @@ def weightedpool_compress_torch(
     return y, y_cu_seqlens
 
 
-def linear_compress(
+def linear_compress_torch(
     x: torch.Tensor,
     w: torch.Tensor,  # [num_heads, kernel_size * head_dim, head_dim]
     cu_seqlens,

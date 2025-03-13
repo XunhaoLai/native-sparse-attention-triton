@@ -14,12 +14,8 @@
 
 import torch
 import triton
-from native_sparse_attention.ops.torch.compress_key_value import (
-    linear_compress as linear_compress_torch,
-)
-from native_sparse_attention.ops.triton.linear_compress import (
-    linear_compress as linear_compress_triton,
-)
+from native_sparse_attention.ops.torch.compress_key_value import linear_compress_torch
+from native_sparse_attention.ops.triton.linear_compress import linear_compress
 
 
 def test_linear_compress(
@@ -114,7 +110,7 @@ def test_linear_compress(
             pe=pe_torch,
         )
 
-        y_triton, y_cu_seqlens_triton = linear_compress_triton(
+        y_triton, y_cu_seqlens_triton = linear_compress(
             x=x_triton,
             w=w_triton,
             cu_seqlens=cu_seqlens,
@@ -246,7 +242,7 @@ if __name__ == "__main__":
             if provider == "torch":
                 out, _ = linear_compress_torch(x, w, cu_seqlens_b32, K, S, pe)
             else:
-                out, _ = linear_compress_triton(x, w, cu_seqlens_b32, K, S, pe)
+                out, _ = linear_compress(x, w, cu_seqlens_b32, K, S, pe)
             out.backward(out)  # Using output as gradient for simplicity
             return out
 

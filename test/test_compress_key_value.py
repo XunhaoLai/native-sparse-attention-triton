@@ -12,12 +12,7 @@
 # See the License for the specific
 import torch
 import triton
-from native_sparse_attention.ops.torch.compress_key_value import (
-    conv_compress,
-    avgpool_compress,
-    weightedpool_compress,
-    linear_compress,
-)
+from native_sparse_attention.ops import linear_compress
 
 
 if __name__ == "__main__":
