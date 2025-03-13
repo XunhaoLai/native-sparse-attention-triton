@@ -23,10 +23,10 @@ from native_sparse_attention.ops.triton.linear_compress import (
 
 
 def test_linear_compress(
-    batch_size: int = 4,
-    num_heads: int = 8,
-    head_dim: int = 64,
-    max_seqlen: int = 512,
+    batch_size: int = 1,
+    num_heads: int = 1,
+    head_dim: int = 32,
+    max_seqlen: int = 32,
     kernel_sizes: list = [16, 32],
     kernel_strides: list = [8, 16],
     use_pe: bool = True,
@@ -51,12 +51,14 @@ def test_linear_compress(
     torch.manual_seed(42)
 
     # Generate random sequence lengths for each batch
+    
     seqlens = torch.randint(
         low=kernel_sizes[0],  # minimum length should be at least kernel_size
         high=max_seqlen + 1,
         size=(batch_size,),
         device=device,
     )
+    # seqlens[:] = max_seqlen
     cu_seqlens = torch.cat(
         [
             torch.tensor([0], device=device, dtype=torch.int32),
@@ -194,12 +196,12 @@ def test_linear_compress(
 if __name__ == "__main__":
     # Run tests
     test_linear_compress(
-        batch_size=4,
+        batch_size=16,
         num_heads=8,
-        head_dim=32,
-        max_seqlen=512,
-        kernel_sizes=[32, 64],
-        kernel_strides=[16, 32],
+        head_dim=96,
+        max_seqlen=99,
+        kernel_sizes=[64],
+        kernel_strides=[32],
         use_pe=False,
         dtype=torch.float16,
         device="cuda",
@@ -216,10 +218,10 @@ if __name__ == "__main__":
             styles=[("green", "-"), ("blue", "-")],
             ylabel="ms",
             plot_name="** forward **",
-            args={"H": 4, "D": 128},
+            args={"H": 4, "D": 64},
         )
     )
-    def benchmark(N, H, D, provider):
+    def benchmark_fwd(N, H, D, provider):
         K, S = 32, 16
         x = torch.zeros(N, H, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
         w = torch.zeros(H, K * D, D, device="cuda", dtype=torch.bfloat16).uniform_(
@@ -244,4 +246,45 @@ if __name__ == "__main__":
             )
         return ms, min_ms, max_ms
 
-    benchmark.run(show_plots=True, print_data=True)
+    # benchmark
+    @triton.testing.perf_report(
+        triton.testing.Benchmark(
+            x_names=["N"],
+            x_vals=[1024 * 2**i for i in range(1, 8)],
+            line_arg="provider",
+            line_vals=["torch", "triton"],
+            line_names=["torch", "triton"],
+            styles=[("green", "-"), ("blue", "-")],
+            ylabel="ms",
+            plot_name="** forward + backward **",
+            args={"H": 4, "D": 64},
+        )
+    )
+    def benchmark_fwdbwd(N, H, D, provider):
+        K, S = 32, 16
+        # Input tensors
+        x = torch.zeros(N, H, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
+        x.requires_grad = True
+        w = torch.zeros(H, K * D, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
+        w.requires_grad = True
+        pe = torch.zeros(H, K, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
+        cu_seqlens_b32 = (
+            torch.LongTensor([N // 32 if i > 0 else 0 for i in range(33)]).int().cuda()
+        )
+        cu_seqlens_b32 = cu_seqlens_b32.cumsum(0).to(torch.int32)
+
+        quantiles = [0.5, 0.2, 0.8]
+        
+        def fwd_bwd():
+            if provider == "torch":
+                out, _ = linear_compress_torch(x, w, cu_seqlens_b32, K, S, pe)
+            else:
+                out, _ = linear_compress_triton(x, w, cu_seqlens_b32, K, S, pe)
+            out.backward(out)  # Using output as gradient for simplicity
+            return out
+
+        ms, min_ms, max_ms = triton.testing.do_bench(fwd_bwd, quantiles=quantiles)
+        return ms, min_ms, max_ms
+
+
+    benchmark_fwdbwd.run(show_plots=True, print_data=True)
