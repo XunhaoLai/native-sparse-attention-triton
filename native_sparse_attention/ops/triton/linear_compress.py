@@ -18,7 +18,9 @@ import triton
 import torch
 import triton.language as tl
 from einops import rearrange, einsum
-import pdb
+from native_sparse_attention.ops.triton.utils import is_hopper_gpu
+
+IS_HOPPER_GPU = is_hopper_gpu()
 
 
 @triton.jit
@@ -92,15 +94,6 @@ def linear_compress_fwd_kernel(
         )
         < x_len
     )[:, :, None]
-
-    # x_ptrs = tl.make_block_ptr(
-    #     base=X + pid_h * stride_xh,
-    #     shape=(x_len, x_len, HEADd_DIM),
-    #     strides=(stride_xn, stride_xn, stride_xd),
-    #     offsets=(x_start + pid_k * KERNEL_STRIDE, 0, 0),
-    #     block_shape=(BLOCK_OUTPUT_SEQ_SIZE, BLOCK_KERNEL_SIZE, BLOCK_HEADd_DIM),
-    #     order=(2, 1, 0),
-    # )
 
     w_ptrs = tl.make_block_ptr(
         base=W + pid_h * stride_wh,
@@ -370,8 +363,8 @@ class LinearCompress(torch.autograd.Function):
             y_cu_seqlens[-1], num_heads, head_dim, dtype=x.dtype, device=x.device
         )
 
-        block_kernel_size = triton.next_power_of_2(kernel_size)
-        block_head_dim = 8
+        block_kernel_size = max(16, triton.next_power_of_2(kernel_size))
+        block_head_dim = 8 if IS_HOPPER_GPU else 4
         block_headD_dim = 32
         block_output_seq_size = 64
         w = w.reshape(num_heads, kernel_size, head_dim, head_dim).contiguous()

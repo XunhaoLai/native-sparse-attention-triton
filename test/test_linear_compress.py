@@ -211,45 +211,6 @@ if __name__ == "__main__":
     @triton.testing.perf_report(
         triton.testing.Benchmark(
             x_names=["N"],
-            x_vals=[1024 * 2**i for i in range(1, 6)],
-            line_arg="provider",
-            line_vals=["torch", "triton"],
-            line_names=["torch", "triton"],
-            styles=[("green", "-"), ("blue", "-")],
-            ylabel="ms",
-            plot_name="** forward **",
-            args={"H": 4, "D": 64},
-        )
-    )
-    def benchmark_fwd(N, H, D, provider):
-        K, S = 32, 16
-        x = torch.zeros(N, H, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
-        w = torch.zeros(H, K * D, D, device="cuda", dtype=torch.bfloat16).uniform_(
-            -1, 1
-        )
-        pe = torch.zeros(H, K, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
-        cu_seqlens_b32 = (
-            torch.LongTensor([N // 32 if i > 0 else 0 for i in range(33)]).int().cuda()
-        )
-        cu_seqlens_b32 = cu_seqlens_b32.cumsum(0).to(torch.int32)
-
-        quantiles = [0.5, 0.2, 0.8]
-        if provider == "torch":
-            ms, min_ms, max_ms = triton.testing.do_bench(
-                lambda: linear_compress_torch(x, w, cu_seqlens_b32, K, S, pe),
-                quantiles=quantiles,
-            )
-        if provider == "triton":
-            ms, min_ms, max_ms = triton.testing.do_bench(
-                lambda: linear_compress_triton(x, w, cu_seqlens_b32, K, S, pe),
-                quantiles=quantiles,
-            )
-        return ms, min_ms, max_ms
-
-    # benchmark
-    @triton.testing.perf_report(
-        triton.testing.Benchmark(
-            x_names=["N"],
             x_vals=[1024 * 2**i for i in range(1, 8)],
             line_arg="provider",
             line_vals=["torch", "triton"],
@@ -271,7 +232,11 @@ if __name__ == "__main__":
         w.requires_grad = True
         pe = torch.zeros(H, K, D, device="cuda", dtype=torch.bfloat16).uniform_(-1, 1)
         cu_seqlens_b32 = (
-            torch.LongTensor([N // 32 if i > 0 else 0 for i in range(33)]).int().cuda()
+            torch.LongTensor(
+                [0 if i == 0 else 32 if i > 1 else N - 32 * 31 for i in range(33)]
+            )
+            .int()
+            .cuda()
         )
         cu_seqlens_b32 = cu_seqlens_b32.cumsum(0).to(torch.int32)
 
