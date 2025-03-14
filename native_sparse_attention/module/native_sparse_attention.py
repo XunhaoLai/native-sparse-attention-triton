@@ -16,15 +16,35 @@ from flash_attn import flash_attn_varlen_func
 from native_sparse_attention.ops import (
     compressed_attention,
     topk_sparse_attention,
+    avgpool_compress,
     weightedpool_compress,
+    linear_compress,
 )
 from einops import rearrange
 from native_sparse_attention.module.rope import RopeConfig, RotaryEmbedding
 
 
+COMPRESS_TYPE_TO_FUNC = {
+    "avgpool": avgpool_compress,
+    "weightedpool": weightedpool_compress,
+    "linear": linear_compress,
+}
+
+COMPRESS_TYPE_TO_WEIGHT = {
+    "avgpool": lambda num_heads, head_dim, kernel_size: None,
+    "weightedpool": lambda num_heads, head_dim, kernel_size: torch.zeros(
+        num_heads, kernel_size
+    ),
+    "linear": lambda num_heads, head_dim, kernel_size: torch.zeros(
+        num_heads, head_dim * kernel_size, head_dim
+    ),
+}
+
+
 class NativeSparseAttentionNoRoPE(torch.nn.Module):
     def __init__(
         self,
+        compress_type: str,
         hidden_size: int,
         num_q_heads: int,
         num_kv_heads: int,
@@ -39,6 +59,7 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
     ):
         super().__init__()
         # configs
+        self.compress_type = compress_type
         self.hidden_size = hidden_size
         self.num_q_heads = num_q_heads
         self.num_kv_heads = num_kv_heads
@@ -65,12 +86,19 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
             self.num_q_heads * self.head_dim, self.hidden_size, bias=False
         )
 
+        # nsa compress func
+        self.compress_func = COMPRESS_TYPE_TO_FUNC[self.compress_type]
+
         # nsa parameteres
         self.compress_key = torch.nn.Parameter(
-            torch.ones(self.num_kv_heads, self.kernel_size) / self.num_kv_heads
+            COMPRESS_TYPE_TO_WEIGHT[self.compress_type](
+                num_kv_heads, head_dim, kernel_size
+            )
         )
         self.compress_value = torch.nn.Parameter(
-            torch.ones(self.num_kv_heads, self.kernel_size) / self.num_kv_heads
+            COMPRESS_TYPE_TO_WEIGHT[self.compress_type](
+                num_kv_heads, head_dim, kernel_size
+            )
         )
         self.intra_block_pe = torch.nn.Parameter(
             torch.zeros(self.num_kv_heads, self.kernel_size, self.head_dim)
@@ -106,7 +134,7 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
         v = self.proj_v(x).view(-1, self.num_kv_heads, self.head_dim)
 
         # compressed attention
-        compressed_k, compressed_cu_seqlens = weightedpool_compress(
+        compressed_k, compressed_cu_seqlens = self.compress_func(
             k,
             self.compress_key,
             cu_seqlens,
@@ -114,7 +142,7 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
             self.kernel_stride,
             self.intra_block_pe,
         )
-        compressed_v, _ = weightedpool_compress(
+        compressed_v, _ = self.compress_func(
             v,
             self.compress_value,
             cu_seqlens,
@@ -177,6 +205,7 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
 class NativeSparseAttention(torch.nn.Module):
     def __init__(
         self,
+        compress_type: str,
         hidden_size: int,
         num_q_heads: int,
         num_kv_heads: int,
@@ -192,6 +221,7 @@ class NativeSparseAttention(torch.nn.Module):
     ):
         super().__init__()
         # configs
+        self.compress_type = compress_type
         self.hidden_size = hidden_size
         self.num_q_heads = num_q_heads
         self.num_kv_heads = num_kv_heads
@@ -220,12 +250,19 @@ class NativeSparseAttention(torch.nn.Module):
             self.num_q_heads * self.head_dim, self.hidden_size, bias=False
         )
 
+        # nsa compress func
+        self.compress_func = COMPRESS_TYPE_TO_FUNC[self.compress_type]
+
         # nsa parameteres
         self.compress_key = torch.nn.Parameter(
-            torch.ones(self.num_kv_heads, self.kernel_size) / self.num_kv_heads
+            COMPRESS_TYPE_TO_WEIGHT[self.compress_type](
+                num_kv_heads, head_dim, kernel_size
+            )
         )
         self.compress_value = torch.nn.Parameter(
-            torch.ones(self.num_kv_heads, self.kernel_size) / self.num_kv_heads
+            COMPRESS_TYPE_TO_WEIGHT[self.compress_type](
+                num_kv_heads, head_dim, kernel_size
+            )
         )
         self.intra_block_pe = torch.nn.Parameter(
             torch.zeros(self.num_kv_heads, self.kernel_size, self.head_dim)
@@ -264,7 +301,7 @@ class NativeSparseAttention(torch.nn.Module):
         v = self.proj_v(x).view(-1, self.num_kv_heads, self.head_dim)
 
         # compressed key and value before rope
-        compressed_k, compressed_cu_seqlens = weightedpool_compress(
+        compressed_k, compressed_cu_seqlens = self.compress_func(
             k,
             self.compress_key,
             cu_seqlens,
@@ -272,7 +309,7 @@ class NativeSparseAttention(torch.nn.Module):
             self.kernel_stride,
             self.intra_block_pe,
         )
-        compressed_v, _ = weightedpool_compress(
+        compressed_v, _ = self.compress_func(
             v,
             self.compress_value,
             cu_seqlens,
@@ -284,7 +321,7 @@ class NativeSparseAttention(torch.nn.Module):
         # do rope for query and compressed key
         q = self.rope(q, cu_seqlens)
         compressed_k = self.rope(
-            compressed_k, compressed_cu_seqlens, start=0, stride=self.kernel_stride
+            compressed_k, compressed_cu_seqlens, stride=self.kernel_stride
         )
 
         # attention between query and compressed key value

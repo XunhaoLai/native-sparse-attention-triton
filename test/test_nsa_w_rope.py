@@ -18,6 +18,7 @@ if __name__ == "__main__":
     torch.manual_seed(42)
     NSA = (
         NativeSparseAttention(
+            compress_type="linear",
             hidden_size=4096,
             num_q_heads=64,
             num_kv_heads=4,
