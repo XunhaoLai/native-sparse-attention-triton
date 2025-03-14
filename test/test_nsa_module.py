@@ -11,15 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific
 import torch
-from native_sparse_attention.module import NativeSparseAttention, RopeConfig
+import triton
+from native_sparse_attention.module import (
+    SelfAttention,
+    NativeSparseAttention,
+    RopeConfig,
+)
 
 
 if __name__ == "__main__":
     torch.manual_seed(42)
     NSA = (
         NativeSparseAttention(
-            compress_type="linear",
-            hidden_size=4096,
+            compress_type="avgpool",
+            hidden_size=8192,
             num_q_heads=64,
             num_kv_heads=4,
             head_dim=128,
@@ -59,7 +64,7 @@ if __name__ == "__main__":
         ],
         dim=0,
     ).to(torch.int32)
-    x = torch.zeros(cu_seqlens[-1], 4096, device="cuda", dtype=torch.bfloat16).uniform_(
+    x = torch.zeros(cu_seqlens[-1], 8192, device="cuda", dtype=torch.bfloat16).uniform_(
         -1, 1
     )
 
@@ -75,3 +80,59 @@ if __name__ == "__main__":
         print(
             f"Backward, {name}, grad shape: {param.grad.shape}, grad norm: {param.grad.norm()}\n"
         )
+
+    # speed benchmark
+    SelfAttn = (
+        SelfAttention(
+            hidden_size=8192,
+            num_q_heads=64,
+            num_kv_heads=4,
+            head_dim=128,
+            rope_config=RopeConfig(
+                max_position_embeddings=131072,
+                head_dim=128,
+                rope_theta=500000,
+                rope_scaling={
+                    "factor": 8.0,
+                    "high_freq_factor": 4.0,
+                    "low_freq_factor": 1.0,
+                    "original_max_position_embeddings": 8192,
+                    "rope_type": "llama3",
+                },
+            ),
+        )
+        .cuda()
+        .to(torch.bfloat16)
+    )
+
+    @triton.testing.perf_report(
+        triton.testing.Benchmark(
+            x_names=["N"],
+            x_vals=[1024 * 2**i for i in range(1, 8)],
+            line_arg="provider",
+            line_vals=["Self-Attention", "Native-Sparse-Attention"],
+            line_names=["Self-Attention", "Native-Sparse-Attention"],
+            styles=[("green", "-"), ("blue", "-")],
+            ylabel="ms",
+            plot_name="** NSA speed benchmark **",
+            args={},
+        )
+    )
+    def benchmark(N, provider):
+        x = torch.randn(N, 8192, device="cuda", dtype=torch.bfloat16)
+        cu_seqlens = torch.tensor([0, N], device="cuda", dtype=torch.int32)
+        quantiles = [0.5, 0.2, 0.8]
+        with torch.no_grad():
+            if provider == "Self-Attention":
+                ms, min_ms, max_ms = triton.testing.do_bench(
+                    lambda: SelfAttn(x, cu_seqlens),
+                    quantiles=quantiles,
+                )
+            if provider == "Native-Sparse-Attention":
+                ms, min_ms, max_ms = triton.testing.do_bench(
+                    lambda: NSA(x, cu_seqlens),
+                    quantiles=quantiles,
+                )
+        return ms, min_ms, max_ms
+
+    benchmark.run(show_plots=True, print_data=True)

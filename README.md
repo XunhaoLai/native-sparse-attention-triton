@@ -94,6 +94,7 @@ The `modules` directory also provides implementations based on `torch.nn.module`
 from native_sparse_attention.modules import NativeSparseAttention, RopeConfig
 
 NSA_Layer = NativeSparseAttention(
+    compress_type="linear",
     hidden_size=4096,
     num_q_heads=64,
     num_kv_heads=4,

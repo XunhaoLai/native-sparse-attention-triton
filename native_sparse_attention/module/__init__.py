@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from native_sparse_attention.module.native_sparse_attention import NativeSparseAttention
+from native_sparse_attention.module.self_attention import SelfAttention
 from native_sparse_attention.module.rope import RotaryEmbedding, RopeConfig
 from native_sparse_attention.module.kv_cache import NSACache
 
 __all__ = [
+    "SelfAttention",
     "NativeSparseAttention",
     "RotaryEmbedding",
     "RopeConfig",
