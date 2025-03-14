@@ -1,7 +1,8 @@
 import torch
 from native_sparse_attention.ops import linear_compress, weightedpool_compress
 from native_sparse_attention.module import NSACache, RotaryEmbedding, RopeConfig
-from native_sparse_attention.infer.nsa_infer_w_rope import nsa_infer
+from native_sparse_attention.infer import nsa_infer
+
 
 if __name__ == "__main__":
     torch.manual_seed(42)

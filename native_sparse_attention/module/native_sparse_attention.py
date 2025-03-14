@@ -22,7 +22,8 @@ from native_sparse_attention.ops import (
 )
 from einops import rearrange
 from native_sparse_attention.module.rope import RopeConfig, RotaryEmbedding
-
+from native_sparse_attention.infer import nsa_infer
+from native_sparse_attention.module.kv_cache import NSACache
 
 COMPRESS_TYPE_TO_FUNC = {
     "avgpool": avgpool_compress,
@@ -41,6 +42,7 @@ COMPRESS_TYPE_TO_WEIGHT = {
 }
 
 
+# just for debug
 class NativeSparseAttentionNoRoPE(torch.nn.Module):
     def __init__(
         self,
@@ -378,3 +380,51 @@ class NativeSparseAttention(torch.nn.Module):
         attn_output = self.proj_o(attn_output)
 
         return attn_output
+
+    @torch.no_grad()
+    def inference(
+        self,
+        x: torch.Tensor,  # shape: [total_len, hidden_size]
+        cu_seqlens: torch.Tensor,  # shape: [batch_size + 1]
+        step: int,
+        cache: NSACache,
+    ):
+        # dtype and shape check
+        assert x.dtype == torch.bfloat16 or x.dtype == torch.float16
+        assert len(x.shape) == 3
+        assert x.shape[-1] == self.hidden_size
+        cu_seqlens = cu_seqlens.to(torch.int32)
+        seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
+        assert step > 0
+        if step == 0:
+            assert x.shape[0] == cu_seqlens[-1]
+        else:
+            assert x.shape[0] == cu_seqlens.shape[0] - 1
+        # qkv proj
+        q = self.proj_q(x).view(-1, self.num_q_heads, self.head_dim)
+        k = self.proj_k(x).view(-1, self.num_kv_heads, self.head_dim)
+        v = self.proj_v(x).view(-1, self.num_kv_heads, self.head_dim)
+        # gate proj
+        gate = self.gate(x)
+        gate = rearrange(gate, "n (h g) -> n h g", g=3)
+        # nsa infer
+        output = nsa_infer(
+            cu_seqlens,
+            step,
+            q,
+            k,
+            v,
+            gate,
+            self.rope,
+            cache,
+            [self.compress_key, self.compress_value],
+            [self.compress_func, self.compress_func],
+            self.kernel_size,
+            self.kernel_stride,
+            self.block_size,
+            self.topk,
+            self.init_blocks,
+            self.local_blocks,
+            self.window_size,
+        )
+        return output
