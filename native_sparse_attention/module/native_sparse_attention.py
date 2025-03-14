@@ -205,6 +205,24 @@ class NativeSparseAttentionNoRoPE(torch.nn.Module):
 
 
 class NativeSparseAttention(torch.nn.Module):
+    """Native sparse attention module, support training and inference
+
+    Args:
+        compress_type (str): key value compression type, currently support ['linear', 'avgpool', 'weightedpool']
+        hidden_size (int): hidden dimension
+        num_q_heads (int): number of query heads
+        num_kv_heads (int): number of key/value heads, must be divisible by num_q_heads
+        head_dim (int): head dim
+        kernel_size (int): kernel size of compression
+        kernel_stride (int): kernel stride ofr compression
+        block_size (int): block size of sparse attention
+        topk (int): topk of sparse attention
+        init_blocks (int): number of blocks at the begining of the sequence, these blocks are force to be computed in sparse attention
+        local_blocks (int): number of blocks at the local window of each query, these blocks are force to be computed in sparse attention
+        window_size (int): window size for sliding window attention
+        rope_config (RopeConfig): config for rotary embedding, see native_sparse_attention.module.rope.RopeConfig for details
+    """
+
     def __init__(
         self,
         compress_type: str,
@@ -419,6 +437,7 @@ class NativeSparseAttention(torch.nn.Module):
             cache,
             [self.compress_key, self.compress_value],
             [self.compress_func, self.compress_func],
+            self.intra_block_pe,
             self.kernel_size,
             self.kernel_stride,
             self.block_size,

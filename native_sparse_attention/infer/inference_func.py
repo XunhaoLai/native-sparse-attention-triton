@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import torch
-from typing import Tuple, Callable
+from typing import Tuple, Callable, Optional
 from flash_attn import flash_attn_varlen_func
 from native_sparse_attention.ops import (
     flash_attention_decode,
@@ -22,7 +22,6 @@ from native_sparse_attention.ops import (
     topk_sparse_attention_decode,
 )
 from native_sparse_attention.ops.triton.utils import get_compressed_seqlens
-from native_sparse_attention.module import NSACache
 
 
 def compress_infer(
@@ -30,9 +29,10 @@ def compress_infer(
     step: int,
     key: torch.Tensor,
     value: torch.Tensor,
-    cache: NSACache,
+    cache,
     weight: Tuple[torch.Tensor, torch.Tensor],
     compress_func: Tuple[Callable, Callable],
+    intra_block_pe: Optional[torch.Tensor],
     kernel_size: int,
     kernel_stride: int,
 ):
@@ -43,6 +43,7 @@ def compress_infer(
             cu_seqlens,
             kernel_size,
             kernel_stride,
+            intra_block_pe,
         )
         value, _ = compress_func[1](
             value,
@@ -65,6 +66,7 @@ def compress_infer(
             aux_cu_seqlens,
             kernel_size,
             kernel_stride,
+            intra_block_pe,
         )
         value, _ = compress_func[1](
             cache.before_compress_kv_cache[1, :batch_size].view(

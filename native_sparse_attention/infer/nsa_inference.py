@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import torch
-from typing import Tuple, Callable
-from native_sparse_attention.module import RotaryEmbedding, NSACache
+from typing import Tuple, Callable, Optional
 from native_sparse_attention.infer.inference_func import (
     compress_infer,
     compressed_attention_infer,
@@ -31,13 +30,14 @@ def nsa_infer(
     value: torch.Tensor,
     gate_value: torch.Tensor,  # prefill: [total_len, num_heads, 3], decode: [batch_size, num_heads, 3]
     # rope and kv cache
-    rope: RotaryEmbedding,
-    cache: NSACache,
+    rope,
+    cache,
     # weight for nsa compress
     compress_weight: Tuple[
         torch.Tensor, torch.Tensor
     ],  # compress weight for key and value
     compress_func: Tuple[Callable, Callable],  # compress function for key and value
+    intra_block_pe: Optional[torch.Tensor],
     # nsa parameters
     kernel_size: int,
     kernel_stride: int,
@@ -46,7 +46,35 @@ def nsa_infer(
     init_blocks: int,
     local_blocks: int,
     window_size: int,
-):
+) -> torch.Tensor:
+    """Inference function for native sparse attention. Support prefill and decode with kv cache.
+
+    Args:
+        cu_seqlens (torch.Tensor): shape [batch_size + 1], similar to cu_seqlens_q in flash_attn_func_varlen.
+        step (int): current inference step, step == 0 means prefill, step > 0 means decode step.
+        query (torch.Tensor): for prefill, shape [total_len, num_q_heads, head_dim]; for decode, shape [batch_size, num_q_heads, head_dim]
+        key (torch.Tensor): for prefill, shape [total_len, num_kv_heads, head_dim]; for decode, shape [batch_size, num_kv_heads, head_dim]
+        value (torch.Tensor): for prefill, shape [total_len, num_kv_heads, head_dim]; for decode, shape [batch_size, num_kv_heads, head_dim]
+        gate_value (torch.Tensor): for prefill, shape [total_len, num_heads, 3]; for decode, shape [batch_size, num_heads, 3]
+        rope (RotaryEmbedding): rope module, see native_sparse_attention.module.rope.RotaryEmbedding for details
+        cache (NSACache): kv cache, seed native_sparse_attention.module.kv_cache.NSACache for details
+        compress_weight (Tuple[torch.Tensor, torch.Tensor]): compress weight of key and value respectively
+        compress_func (Tuple[Callable, Callable]): compress functions for key and value respectively
+        intra_block_pe (Optional[torch.Tensor]): intra-block positonal embedding for compression, set to None if don't use it
+        kernel_size (int): kernel size of compression
+        kernel_stride (int): kernel stride ofr compression
+        block_size (int): block size of sparse attention
+        topk (int): topk of sparse attention
+        init_blocks (int): number of blocks at the begining of the sequence, these blocks are force to be computed in sparse attention
+        local_blocks (int): number of blocks at the local window of each query, these blocks are force to be computed in sparse attention
+        window_size (int): window size for sliding window attention
+
+    Returns:
+        torch.Tensor: native sparse attention output, same shape as input query
+    """
+    # reset kv cache at the begining of prefilling
+    if step == 0:
+        cache.reset()
     # prepare for compress
     cache.prepare_compress(cu_seqlens, step, key, value)
     # compressed key and value before rope
@@ -58,6 +86,7 @@ def nsa_infer(
         cache,
         compress_weight,
         compress_func,
+        intra_block_pe,
         kernel_size,
         kernel_stride,
     )

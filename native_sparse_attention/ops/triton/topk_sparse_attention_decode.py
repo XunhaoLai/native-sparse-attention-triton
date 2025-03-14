@@ -149,14 +149,28 @@ def forward_kernel(
 
 
 def topk_sparse_attention_decode(
-    q: torch.Tensor,  # [batch_size, num_q_heads, head_dim]
-    k: torch.Tensor,  # [batch_size, kv_len, num_k_heads, head_dim]
-    v: torch.Tensor,  # [batch_size, kv_len, num_k_heads, head_dim]
-    topk_idx: torch.Tensor,  # [num_k_heads, batch_size, topk]
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    topk_idx: torch.Tensor,
     block_size: int,
-    seqlens: torch.Tensor,  # [batch_size, ]
+    seqlens: torch.Tensor,
     sm_scale: Optional[float] = None,
-):
+) -> torch.Tensor:
+    """_summary_
+
+    Args:
+        q (torch.Tensor): shape [batch_size, num_q_heads, head_dim]
+        k (torch.Tensor): shape [batch_size, kv_len, num_kv_heads, head_dim]
+        v (torch.Tensor): shape [batch_size, kv_len, num_kv_heads, head_dim]
+        topk_idx (torch.Tensor): topk block idx for each query, shape [num_kv_heads, batch_size, topk]. -1 means padding.
+        block_size (int): key value block size.
+        seqlens (torch.Tensor): max kv length for each sequence
+        softmax_scale (Optional[float], optional): Defaults to None, means 1/sqrt(head_dim).
+
+    Returns:
+        torch.Tensor: sparse attention output
+    """
     # dtype check
     assert q.dtype == torch.bfloat16 or q.dtype == torch.float16
     assert k.dtype == q.dtype and v.dtype == q.dtype

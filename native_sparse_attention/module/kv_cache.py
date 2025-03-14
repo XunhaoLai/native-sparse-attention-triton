@@ -19,6 +19,24 @@ from native_sparse_attention.ops.triton.utils import get_compressed_seqlens
 
 
 class NSACache:
+    """KV cache manager for native sparse attention.
+    Args:
+        max_batch_size (int): max batch size
+        max_length (int): max length, including prompt len and reponse len
+        num_kv_heads (int): number of key/value heads
+        head_dim (int): head dim
+        kernel_size (int): kernel size of compression
+        kernel_stride (int): kernel stride ofr compression
+        window_size (int): window size for sliding window attention
+        dtype (torch.dtype): data type for kv cache, should be same as model weight dtype
+        device (Union[str, torch.device]): default to 'cuda'
+
+    Methods:
+        reset: reset kv cache, should be called before prefilling
+        prepare_compress: store keys/values for compression, should be called before key/value compression at both prefilling and decoding
+        update_kv: update key/value cache, should be called after rope
+    """
+
     def __init__(
         self,
         max_batch_size: int,
@@ -29,7 +47,7 @@ class NSACache:
         kernel_stride: int,
         window_size: int,
         dtype: torch.dtype,
-        device: Union[str, torch.device],
+        device: Union[str, torch.device] = "cuda",
     ):
         self.max_batch_size = max_batch_size
         self.max_length = max_length

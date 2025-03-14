@@ -63,9 +63,9 @@ def transform_score(
 
 
 def compressed_attention_decode(
-    q: torch.Tensor,  # [batch_size, num_q_heads, head_dim]
-    k: torch.Tensor,  # [batch_size, kv_len, num_k_heads, head_dim]
-    v: torch.Tensor,  # [batch_size, kv_len, num_k_heads, head_dim]
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
     seqlens: torch.Tensor,
     compress_seqlens: torch.Tensor,
     kernel_size: int,
@@ -76,6 +76,25 @@ def compressed_attention_decode(
     local_blocks: int = 2,
     sm_scale: Optional[float] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """_summary_
+
+    Args:
+        q (torch.Tensor): shape [batch_size, num_q_heads, head_dim]
+        k (torch.Tensor): shape [batch_size, kv_len, num_kv_heads, head_dim]
+        v (torch.Tensor): shape [batch_size, kv_len, num_kv_heads, head_dim]
+        seqlens (torch.Tensor): original kv length for each sequence
+        compress_seqlens (torch.Tensor): kv length for each sequence after compression
+        kernel_size (int): kernel size in compress_key_value
+        kernel_stride (int): stride of compress_key_value
+        block_size (int): key value block size for topk sparse attention.
+        topk (int): number of blocks for each query.
+        init_blocks (int, optional): Number of init blocks for each query. Defaults to 1.
+        local_blocks (int, optional): Number of local blocks for each query. Defaults to 2.
+        sm_scale (float, optional): softmax scale. Defaults to None, means 1/sqrt(head_dim).
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: attention output and topk_idx used in topk_sparse_attention_decode
+    """
     assert block_size % kernel_size == 0 and kernel_size % kernel_stride == 0
     batch_size, num_q_heads, head_dim = q.shape
     batch_size, kv_len, num_k_heads, _ = k.shape

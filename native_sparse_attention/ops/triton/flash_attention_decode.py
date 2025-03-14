@@ -145,7 +145,19 @@ def flash_attention_decode(
     v: torch.Tensor,
     seqlens: torch.Tensor,  # [batch_size, ]
     sm_scale: Optional[float] = None,
-):
+) -> torch.Tensor:
+    """flash attention for decode.
+
+    Args:
+        q (torch.Tensor): query, shape [batch_size, num_q_heads, head_dim]
+        k (torch.Tensor): key, shape [batch_size, kv_len, num_kv_heads, head_dim]
+        v (torch.Tensor): value, shape [batch_size, kv_len, num_kv_heads, head_dim]
+        seqlens (torch.Tensor): kv length for each sequence
+        sm_scale (Optional[float]): softmax scale, default to 1/sqrt(head_dim)
+
+    Returns:
+        torch.Tensor: attention output
+    """
     # dtype check
     assert q.dtype == torch.bfloat16 or q.dtype == torch.float16
     assert k.dtype == q.dtype and v.dtype == q.dtype

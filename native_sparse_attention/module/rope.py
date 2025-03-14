@@ -26,6 +26,8 @@ from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 # default to llama3.1 rope config
 @dataclass
 class RopeConfig:
+    """Config for RotaryEmbedding, similar to transformers llama."""
+
     max_position_embeddings: int = 131072
     head_dim: int = 128
     rope_theta: float = 500000
@@ -58,6 +60,13 @@ def rotate_half(x):
 # copy and modify from modify from hugigngface transformers
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py
 class RotaryEmbedding(nn.Module):
+    """Rotary embedding
+
+    Args:
+        config (RopeConfig): config for rotary embedding, see native_sparse_attention.module.rope.RopeConfig for details
+        device (str): default to 'cuda'
+    """
+
     cos = None
     sin = None
 
