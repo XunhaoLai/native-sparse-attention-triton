@@ -306,7 +306,7 @@ def weightedpool_compress(
     kernel_stride: int,
     pe: Optional[torch.Tensor] = None,
 ):
-    """Compress key and value tensor with kernel_size and kernel_stride.
+    """Compress key and value tensor with kernel_size and kernel_stride with weighted pooling
 
     Args:
         x (torch.Tensor): key_states or value_states, shape (total_len, num_heads, head_dim)
@@ -338,7 +338,7 @@ def avgpool_compress(
     kernel_stride: int,
     pe: Optional[torch.Tensor] = None,
 ):
-    """Compress key and value tensor with kernel_size and kernel_stride.
+    """Compress key and value tensor with kernel_size and kernel_stride with average pooling.
 
     Args:
         x (torch.Tensor): key_states or value_states, shape (total_len, num_heads, head_dim)

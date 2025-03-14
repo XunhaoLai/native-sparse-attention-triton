@@ -356,17 +356,17 @@ def backward_dkdv(
         d = tl.load(d_ptrs, boundary_check=(0, 1), padding_option="zero")
         # compute qk
         qk = tl.where((off_q + i)[:, None] >= off_k[None, :], float(0.0), float("-inf"))
-        qk += tl.dot(q, k.T) * qk_scale
+        qk += tl.dot(q, tl.trans(k)) * qk_scale
         # compute p, ds
         p = tl.exp2(qk - lse)
-        dp = tl.dot(do, v.T)
+        dp = tl.dot(do, tl.trans(v))
         ds = sm_scale * p * (dp - d)
         # cast dtype
         p = p.to(do.dtype)
         ds = ds.to(q.dtype)
         # update dk and dv
-        dk += tl.dot(ds.T, q)
-        dv += tl.dot(p.T, do)
+        dk += tl.dot(tl.trans(ds), q)
+        dv += tl.dot(tl.trans(p), do)
         # increment pointers
         q_ptrs = tl.advance(q_ptrs, (BLOCK_SIZE_Q, 0))
         do_ptrs = tl.advance(do_ptrs, (BLOCK_SIZE_Q, 0))
@@ -515,10 +515,10 @@ def backward_dq(
         qk += tl.where(
             off_q[:, None] >= (i * kernel_stride + off_k)[None, :], 0, float("-inf")
         )
-        qk += tl.dot(q, k.T) * qk_scale
+        qk += tl.dot(q, tl.trans(k)) * qk_scale
         # compute p, ds
         p = tl.exp2(qk - lse)
-        dp = tl.dot(do, v.T)
+        dp = tl.dot(do, tl.trans(v))
         ds = sm_scale * p * (dp - d)
         # cast dtype
         ds = ds.to(q.dtype)

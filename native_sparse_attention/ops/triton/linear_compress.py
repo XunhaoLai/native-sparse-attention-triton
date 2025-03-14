@@ -500,7 +500,7 @@ def linear_compress(
     kernel_stride: int,
     pe: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compress key and value tensor with kernel_size and kernel_stride. Similar to conv_compress.
+    """Compress key and value tensor with kernel_size and kernel_stride with linear projection.
 
     Args:
         x (torch.Tensor): key_states or value_states, shape (total_len, num_heads, head_dim)

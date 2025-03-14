@@ -1,18 +1,4 @@
 # Copyright 2025 Xunhao Lai & Jianqiao Lu.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# coding=utf-8
 # Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
 #
 # This code is based on EleutherAI's GPT-NeoX library and the GPT-NeoX
@@ -35,12 +21,13 @@ import torch
 from dataclasses import dataclass, field
 from torch import nn
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
-from flash_attn.layers.rotary import apply_rotary_emb
 
 
 # default to llama3.1 rope config
 @dataclass
 class RopeConfig:
+    """Config for RotaryEmbedding, similar to transformers llama."""
+
     max_position_embeddings: int = 131072
     head_dim: int = 128
     rope_theta: float = 500000
@@ -62,10 +49,28 @@ class RopeConfig:
         self.hidden_size = self.head_dim
 
 
+# Copied from transformers.models.llama.modeling_llama.rotate_half
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
 # copy and modify from modify from hugigngface transformers
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py
 class RotaryEmbedding(nn.Module):
-    def __init__(self, config: RopeConfig, device=None):
+    """Rotary embedding
+
+    Args:
+        config (RopeConfig): config for rotary embedding, see native_sparse_attention.module.rope.RopeConfig for details
+        device (str): default to 'cuda'
+    """
+
+    cos = None
+    sin = None
+
+    def __init__(self, config: RopeConfig, device="cuda"):
         super().__init__()
         # BC: "rope_type" was originally "type"
         if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
@@ -138,52 +143,65 @@ class RotaryEmbedding(nn.Module):
             sin = emb.sin()
 
         # Advanced RoPE types (e.g. yarn) apply a post-processing scaling factor, equivalent to scaling attention
-        cos = cos * self.attention_scaling
-        sin = sin * self.attention_scaling
+        cos = (cos * self.attention_scaling).to(dtype=x.dtype).squeeze(0)
+        sin = (sin * self.attention_scaling).to(dtype=x.dtype).squeeze(0)
 
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+        # save cos sin
+        RotaryEmbedding.cos = torch.cat([cos, cos], dim=-1)
+        RotaryEmbedding.sin = torch.cat([sin, sin], dim=-1)
 
-    def forward(
-        self, x: torch.Tensor, cu_seqlens: torch.Tensor, start: int = 0, stride: int = 1
+        return RotaryEmbedding.cos, RotaryEmbedding.sin
+
+    @torch.no_grad()
+    def generate_pos_embs(
+        self,
+        x: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        seqlens: torch.Tensor,
+        step: int = 0,
+        stride: int = 1,
     ):
-        total_seqlen, num_heads, head_dim = x.shape
+        if (
+            RotaryEmbedding.cos is None
+            or seqlens.max() + step > RotaryEmbedding.cos.shape[0]
+        ):
+            self.generate_cos_sin(
+                x, torch.arange(seqlens.max() + step).to(x.device)[None, :]
+            )
+
+        cos_embs = []
+        sin_embs = []
+        bsz = len(cu_seqlens) - 1
+
+        for i in range(bsz):
+            if step == 0:  # prefilling
+                r = cu_seqlens[i + 1] - cu_seqlens[i]
+                cos_emb, sin_emb = (
+                    RotaryEmbedding.cos[: r * stride : stride],
+                    RotaryEmbedding.sin[: r * stride : stride],
+                )
+            elif step > 0:  # decoding
+                r = cu_seqlens[i + 1] - cu_seqlens[i] + step - 1
+                cos_emb, sin_emb = (
+                    RotaryEmbedding.cos[r * stride : r * stride + 1],
+                    RotaryEmbedding.sin[r * stride : r * stride + 1],
+                )
+            cos_embs.append(cos_emb)
+            sin_embs.append(sin_emb)
+
+        cos_embs = torch.cat(cos_embs, dim=0)
+        sin_embs = torch.cat(sin_embs, dim=0)
+        return cos_embs, sin_embs
+
+    def forward(self, x, cu_seqlens, step=0, stride=1):
         seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
-        max_seqlen = seqlens.max().item()
-        max_position_ids = torch.arange(
-            start, max_seqlen * stride + start, stride, device=x.device
-        )[:max_seqlen]
-        cos, sin = self.generate_cos_sin(x, max_position_ids[None, ...])
-        cos, sin = cos.squeeze(0), sin.squeeze(0)
-        x = apply_rotary_emb(x, cos, sin, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)
+        cos_embs, sin_embs = self.generate_pos_embs(
+            x,
+            cu_seqlens,
+            seqlens,
+            step=step,
+            stride=stride,
+        )
+        N, H, D = x.shape[0], x.shape[-2], x.shape[-1]  # H: number of heads
+        x = x * cos_embs.view(N, 1, D) + rotate_half(x) * sin_embs.view(N, 1, D)
         return x
-
-
-if __name__ == "__main__":
-    rope_config = RopeConfig(
-        max_position_embeddings=131072,
-        head_dim=128,
-        rope_theta=500000,
-        rope_scaling={
-            "factor": 8.0,
-            "high_freq_factor": 4.0,
-            "low_freq_factor": 1.0,
-            "original_max_position_embeddings": 8192,
-            "rope_type": "llama3",
-        },
-    )
-    rope = RotaryEmbedding(rope_config, "cuda")
-
-    # random input
-    torch.manual_seed(42)
-    seqlens = torch.LongTensor([1000, 2000, 4096]).int().cuda()
-    cu_seqlens = torch.cat(
-        [
-            torch.zeros(1, dtype=torch.int32, device="cuda"),
-            torch.cumsum(seqlens, dim=0),
-        ],
-        dim=0,
-    ).to(torch.int32)
-    x = torch.zeros(
-        cu_seqlens[-1], 32, 128, device="cuda", dtype=torch.bfloat16
-    ).uniform_(-1, 1)
-    y = rope(x, cu_seqlens)

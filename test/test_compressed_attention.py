@@ -17,7 +17,7 @@ from native_sparse_attention.ops.torch.compressed_attention import (
     compressed_attention_torch,
 )
 from native_sparse_attention.ops.triton.compressed_attention import compressed_attention
-from native_sparse_attention.ops import conv_compress, avgpool_compress
+from native_sparse_attention.ops import avgpool_compress
 from native_sparse_attention.ops.triton.flash_attention import flash_attention_varlen
 from flash_attn import flash_attn_varlen_func
 
@@ -54,17 +54,13 @@ if __name__ == "__main__":
         .uniform_(-1, 1)
         .to(torch.float16)
     )
-    w = (
-        torch.empty(num_heads // 4 * head_dim, head_dim, kernel_size, device="cuda")
-        .uniform_(-1, 1)
-        .to(torch.float16)
-    )
     q.requires_grad = True
     k.requires_grad = True
     v.requires_grad = True
-    w.requires_grad = True
 
-    ck, ck_cu_seqlens = conv_compress(k, w, cu_seqlens, kernel_size, kernel_stride)
+    ck, ck_cu_seqlens = avgpool_compress(
+        k, None, cu_seqlens, kernel_size, kernel_stride
+    )
 
     ck = torch.empty_like(ck).uniform_(-1, 1)
     cv = torch.empty_like(ck).uniform_(-1, 1)
