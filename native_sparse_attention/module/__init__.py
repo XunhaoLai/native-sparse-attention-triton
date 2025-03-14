@@ -16,10 +16,12 @@ from native_sparse_attention.module.native_sparse_attention import (
     NativeSparseAttention,
 )
 from native_sparse_attention.module.rope import RotaryEmbedding, RopeConfig
+from native_sparse_attention.module.kv_cache import NSACache
 
 __all__ = [
     "NativeSparseAttentionNoRoPE",
     "NativeSparseAttention",
     "RotaryEmbedding",
     "RopeConfig",
+    "NSACache",
 ]
