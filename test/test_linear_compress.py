@@ -15,7 +15,8 @@
 import torch
 import triton
 from native_sparse_attention.ops.torch.compress_key_value import linear_compress_torch
-from native_sparse_attention.ops.triton.linear_compress import linear_compress
+# from native_sparse_attention.ops.triton.linear_compress import linear_compress
+from native_sparse_attention.ops.tilelang.linear_compress import linear_compress
 
 
 def test_linear_compress(
@@ -193,8 +194,8 @@ if __name__ == "__main__":
     # Run tests
     test_linear_compress(
         batch_size=16,
-        num_heads=8,
-        head_dim=128,
+        num_heads=16,
+        head_dim=64,
         max_seqlen=2048,
         kernel_sizes=[32],
         kernel_strides=[16],
