@@ -18,6 +18,110 @@ from typing import Union
 from native_sparse_attention.ops.triton.utils import get_compressed_seqlens
 
 
+class KVCache:
+    def __init__(
+        self,
+        max_batch_size: int,
+        max_length: int,
+        num_kv_heads: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: Union[str, torch.device],
+    ):
+        self.max_batch_size = max_batch_size
+        self.max_length = max_length
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = head_dim
+        self.dtype = dtype
+        self.device = device
+
+        # alloc kv cache tensor for topk sparse attention
+        self.kv_cache = torch.zeros(
+            2,
+            self.max_batch_size,
+            self.max_length,
+            self.num_kv_heads,
+            self.head_dim,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        self.kv_len = torch.zeros(
+            self.max_batch_size, dtype=torch.int32, device=self.device
+        )
+
+    def reset(self):
+        self.kv_cache.zero_()
+        self.kv_len.zero_()
+
+    def update_kv(
+        self,
+        cu_seqlens: torch.Tensor,
+        step: int,
+        key: torch.Tensor,
+        value: torch.Tensor,
+    ):
+        if step == 0:
+            self._update_kv_prefill(
+                cu_seqlens,
+                step,
+                key,
+                value,
+            )
+        else:
+            self._update_kv_decode(
+                cu_seqlens,
+                step,
+                key,
+                value,
+            )
+
+    def _update_kv_prefill(
+        self,
+        cu_seqlens: torch.Tensor,
+        step: int,
+        key: torch.Tensor,
+        value: torch.Tensor,
+    ):
+        assert step == 0
+        seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
+        batch_size = seqlens.shape[0]
+        # sparse part kv, shape check
+        total_len, num_heads, head_dim = key.shape
+        assert key.shape == value.shape
+        assert num_heads == self.num_kv_heads and head_dim == self.head_dim
+        assert total_len == cu_seqlens[-1].item()
+        # fill sparse part kv cache
+        seq_start, seq_end = cu_seqlens[:-1], cu_seqlens[1:]
+        _fill_kv_cache(
+            self.kv_cache,
+            key,
+            value,
+            seq_start,
+            seq_end,
+        )
+        self.kv_len[:batch_size] = seqlens
+
+    def _update_kv_decode(
+        self,
+        cu_seqlens: torch.Tensor,
+        step: int,
+        key: torch.Tensor,
+        value: torch.Tensor,
+    ):
+        assert step > 0
+        seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
+        # sparse part kv, shape check
+        batch_size, num_heads, head_dim = key.shape
+        assert batch_size == seqlens.shape[0]
+        assert key.shape == value.shape
+        assert num_heads == self.num_kv_heads and head_dim == self.head_dim
+        # fill sparse part kv cache
+        brange = torch.arange(batch_size, dtype=torch.int32, device=key.device)
+        self.kv_cache[0, :batch_size][brange, self.kv_len[:batch_size]] = key
+        self.kv_cache[1, :batch_size][brange, self.kv_len[:batch_size]] = value
+        self.kv_len[:batch_size] += 1
+
+
 class NSACache:
     """KV cache manager for native sparse attention.
     Args:
