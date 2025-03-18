@@ -245,11 +245,9 @@ class NativeSparseAttention(torch.nn.Module):
     ):
         # dtype and shape check
         assert x.dtype == torch.bfloat16 or x.dtype == torch.float16
-        assert len(x.shape) == 3
         assert x.shape[-1] == self.hidden_size
         cu_seqlens = cu_seqlens.to(torch.int32)
-        seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
-        assert step > 0
+        assert step >= 0
         if step == 0:
             assert x.shape[0] == cu_seqlens[-1]
         else:
@@ -282,4 +280,7 @@ class NativeSparseAttention(torch.nn.Module):
             self.local_blocks,
             self.window_size,
         )
+        # output proj
+        output = rearrange(output, "n h d -> n (h d)")
+        output = self.proj_o(output)
         return output

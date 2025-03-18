@@ -1,7 +1,8 @@
+from typing import Optional
 import torch
 import torch.nn as nn
 from dataclasses import dataclass, field
-from native_sparse_attention.module import SelfAttention, RopeConfig
+from native_sparse_attention.module import SelfAttention, RopeConfig, KVCache
 
 
 @dataclass
@@ -27,6 +28,13 @@ class ToyLlamaConfig:
             "rope_type": "llama3",
         }
     )
+
+
+@dataclass
+class InferenceConfig:
+    max_batch_size: int = 32
+    max_length: int = 8192
+    max_new_tokens: int = 128
 
 
 class RMSNorm(nn.Module):
@@ -93,9 +101,17 @@ class ToyLlamaLayer(nn.Module):
         x = x + self.ffn(self.ffn_norm(x))
         return x
 
+    @torch.no_grad()
+    def inference(self, x, cu_seqlens, step, kv_cache):
+        x = x + self.self_attn.inference(self.attn_norm(x), cu_seqlens, step, kv_cache)
+        x = x + self.ffn(self.ffn_norm(x))
+        return x
+
 
 class ToyLlama(nn.Module):
-    def __init__(self, config: ToyLlamaConfig):
+    def __init__(
+        self, config: ToyLlamaConfig, inference_config: Optional[InferenceConfig] = None
+    ):
         super().__init__()
         self.config = config
         self.embedding = nn.Embedding(self.config.vocab_size, self.config.hidden_size)
@@ -127,9 +143,13 @@ class ToyLlama(nn.Module):
             self.config.hidden_size, self.config.vocab_size, bias=False
         )
 
+        # inference config and kv cache
+        self.inference_config = inference_config
+        self.kv_cache = None
+
     def forward(
         self,
-        input_ids: torch.LongTensor,  # shape: [batch_size, max_length]
+        input_ids: torch.LongTensor,  # shape: [total_length, ]
         cu_seqlens: torch.LongTensor,  # shape: [batch_size + 1, ]
     ):
         # embedding
@@ -142,6 +162,60 @@ class ToyLlama(nn.Module):
         # lanugauge head
         x = self.lm_head(x).to(torch.float32)  # [total_len, vocab_size]
         return x
+
+    @torch.no_grad()
+    def inference(
+        self,
+        input_ids: torch.LongTensor,  # prefill shape: [total_length, ]; decode shape: [batch_size, ]
+        cu_seqlens: torch.LongTensor,  # shape: [batch_size + 1, ]
+        step: int,
+    ):
+        # set kv cache if self.kv_cache is None
+        if self.kv_cache is None:
+            self.kv_cache = [
+                KVCache(
+                    max_batch_size=self.inference_config.max_batch_size,
+                    max_length=self.inference_config.max_length,
+                    num_kv_heads=self.config.num_key_value_heads,
+                    head_dim=self.config.head_dim,
+                    dtype=torch.bfloat16,
+                    device="cuda",
+                )
+                for _ in range(self.config.num_hidden_layers)
+            ]
+        # embedding
+        x = self.embedding(input_ids).to(torch.bfloat16)
+        # layers
+        for i, layer in enumerate(self.layers):
+            x = layer.inference(x, cu_seqlens, step, self.kv_cache[i])
+        # final norm
+        x = self.norm(x)
+        # lanugauge head
+        if step == 0:
+            x = x[cu_seqlens[1:] - 1, :]
+        x = self.lm_head(x).to(torch.float32)  # [total_len, vocab_size]
+        return x
+
+    def generate(
+        self,
+        input_ids: torch.LongTensor,
+        cu_seqlens: torch.LongTensor,
+        max_new_tokens: int = -1,
+    ):
+        output_tokens = []
+        if max_new_tokens <= 0:
+            max_new_tokens = self.inference_config.max_new_tokens
+        for step in range(max_new_tokens):
+            logits = self.inference(
+                input_ids, cu_seqlens, step
+            )  # shape: [batch_size, vocab_size]
+            next_token = torch.argmax(logits, dim=-1)  # shape: [batch_size, ]
+            input_ids = next_token
+            output_tokens.append(next_token)
+        output_tokens = torch.stack(
+            output_tokens, dim=1
+        )  # shape: [batch_size, max_new_tokens]
+        return output_tokens
 
 
 if __name__ == "__main__":
@@ -163,8 +237,14 @@ if __name__ == "__main__":
             "rope_type": "llama3",
         },
     )
-    model = ToyLlama(config).cuda().bfloat16()
-    print(f"\nCONFIG:\n{config}\n")
+    inference_config = InferenceConfig(
+        max_batch_size=4,
+        max_length=8192,
+        max_new_tokens=128,
+    )
+    model = ToyLlama(config, inference_config).cuda().bfloat16()
+    print(f"\nMODEL CONFIG:\n{config}\n")
+    print(f"\nINFERENCE CONFIG:\n{inference_config}\n")
     print(f"\nMODEL:\n{model}\n")
 
     # example input
@@ -180,3 +260,7 @@ if __name__ == "__main__":
     # example output
     logits = model(input_ids, cu_seqlens)
     print(f"\nEXAMPLE OUTPUT:\nlogits: {logits.shape}\n")
+
+    # example generate
+    output_tokens = model.generate(input_ids, cu_seqlens, 8)
+    print(f"\nEXAMPLE GENERATE:\noutput_tokens: {output_tokens}\n")

@@ -15,6 +15,8 @@ import torch
 from flash_attn import flash_attn_varlen_func
 from einops import rearrange
 from native_sparse_attention.module.rope import RopeConfig, RotaryEmbedding
+from native_sparse_attention.module.kv_cache import KVCache
+from native_sparse_attention.ops import flash_attention_decode
 
 
 class SelfAttention(torch.nn.Module):
@@ -88,7 +90,7 @@ class SelfAttention(torch.nn.Module):
         q = self.rope(q, cu_seqlens)
         k = self.rope(k, cu_seqlens)
 
-        # sliding window attention
+        # self attention
         attn_output = flash_attn_varlen_func(
             q,
             k,
@@ -105,3 +107,59 @@ class SelfAttention(torch.nn.Module):
         attn_output = self.proj_o(attn_output)
 
         return attn_output
+
+    @torch.no_grad()
+    def inference(
+        self,
+        x: torch.Tensor,  # shape: [total_len, hidden_size]
+        cu_seqlens: torch.Tensor,  # shape: [batch_size + 1]
+        step: int,
+        cache: KVCache,
+    ):
+        # dtype and shape check
+        assert x.dtype == torch.bfloat16 or x.dtype == torch.float16
+        assert x.shape[-1] == self.hidden_size
+        cu_seqlens = cu_seqlens.to(torch.int32)
+        seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
+        assert step >= 0
+        if step == 0:
+            assert x.shape[0] == cu_seqlens[-1]
+        else:
+            assert x.shape[0] == cu_seqlens.shape[0] - 1
+        batch_size = cu_seqlens.shape[0] - 1
+        # qkv proj
+        q = self.proj_q(x).view(-1, self.num_q_heads, self.head_dim)
+        k = self.proj_k(x).view(-1, self.num_kv_heads, self.head_dim)
+        v = self.proj_v(x).view(-1, self.num_kv_heads, self.head_dim)
+        # do rope for query and compressed key
+        q = self.rope(q, cu_seqlens, step)
+        k = self.rope(k, cu_seqlens, step)
+        # reset and update kv cache
+        if step == 0:
+            cache.reset()
+        cache.update_kv(cu_seqlens, step, k, v)
+        # self attention
+        if step == 0:
+            cu_seqlens_q = cu_seqlens_k = cu_seqlens
+            max_seqlen_in_batch_q = max_seqlen_in_batch_k = seqlens.max().item()
+            output = flash_attn_varlen_func(
+                q,
+                k,
+                v,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_in_batch_q,
+                max_seqlen_k=max_seqlen_in_batch_k,
+                causal=True,
+            )
+        else:
+            output = flash_attention_decode(
+                q,
+                cache.kv_cache[0, :batch_size],
+                cache.kv_cache[1, :batch_size],
+                cache.kv_len[:batch_size],
+            )
+        # rearrange and output proj
+        output = rearrange(output, "n h d -> n (h d)")
+        output = self.proj_o(output)
+        return output

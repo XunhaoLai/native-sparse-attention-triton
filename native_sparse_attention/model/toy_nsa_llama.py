@@ -1,7 +1,8 @@
+from typing import Optional
 import torch
 import torch.nn as nn
 from dataclasses import dataclass, field
-from native_sparse_attention.module import NativeSparseAttention, RopeConfig
+from native_sparse_attention.module import NativeSparseAttention, RopeConfig, NSACache
 
 
 @dataclass
@@ -36,6 +37,13 @@ class ToyNSALlamaConfig:
     init_blocks: int = 1
     local_blocks: int = 2
     window_size: int = 512
+
+
+@dataclass
+class InferenceConfig:
+    max_batch_size: int = 32
+    max_length: int = 8192
+    max_new_tokens: int = 128
 
 
 class RMSNorm(nn.Module):
@@ -126,9 +134,19 @@ class ToyNSALlamaLayer(nn.Module):
         x = x + self.ffn(self.ffn_norm(x))
         return x
 
+    @torch.no_grad()
+    def inference(self, x, cu_seqlens, step, kv_cache):
+        x = x + self.nsa.inference(self.attn_norm(x), cu_seqlens, step, kv_cache)
+        x = x + self.ffn(self.ffn_norm(x))
+        return x
+
 
 class ToyNSALlama(nn.Module):
-    def __init__(self, config: ToyNSALlamaConfig):
+    def __init__(
+        self,
+        config: ToyNSALlamaConfig,
+        inference_config: Optional[InferenceConfig] = None,
+    ):
         super().__init__()
         self.config = config
         self.embedding = nn.Embedding(self.config.vocab_size, self.config.hidden_size)
@@ -168,6 +186,10 @@ class ToyNSALlama(nn.Module):
             self.config.hidden_size, self.config.vocab_size, bias=False
         )
 
+        # inference config and kv cache
+        self.inference_config = inference_config
+        self.kv_cache = None
+
     def forward(
         self,
         input_ids: torch.LongTensor,  # shape: [batch_size, max_length]
@@ -183,6 +205,63 @@ class ToyNSALlama(nn.Module):
         # lanugauge head
         x = self.lm_head(x).to(torch.float32)  # [total_len, vocab_size]
         return x
+
+    @torch.no_grad()
+    def inference(
+        self,
+        input_ids: torch.LongTensor,  # prefill shape: [total_length, ]; decode shape: [batch_size, ]
+        cu_seqlens: torch.LongTensor,  # shape: [batch_size + 1, ]
+        step: int,
+    ):
+        # set kv cache if self.kv_cache is None
+        if self.kv_cache is None:
+            self.kv_cache = [
+                NSACache(
+                    max_batch_size=self.inference_config.max_batch_size,
+                    max_length=self.inference_config.max_length,
+                    num_kv_heads=self.config.num_key_value_heads,
+                    head_dim=self.config.head_dim,
+                    kernel_size=self.config.kernel_size,
+                    kernel_stride=self.config.kernel_stride,
+                    window_size=self.config.window_size,
+                    dtype=torch.bfloat16,
+                    device="cuda",
+                )
+                for _ in range(self.config.num_hidden_layers)
+            ]
+        # embedding
+        x = self.embedding(input_ids).to(torch.bfloat16)
+        # layers
+        for i, layer in enumerate(self.layers):
+            x = layer.inference(x, cu_seqlens, step, self.kv_cache[i])
+        # final norm
+        x = self.norm(x)
+        # lanugauge head
+        if step == 0:
+            x = x[cu_seqlens[1:] - 1, :]
+        x = self.lm_head(x).to(torch.float32)  # [total_len, vocab_size]
+        return x
+
+    def generate(
+        self,
+        input_ids: torch.LongTensor,
+        cu_seqlens: torch.LongTensor,
+        max_new_tokens: int = -1,
+    ):
+        output_tokens = []
+        if max_new_tokens <= 0:
+            max_new_tokens = self.inference_config.max_new_tokens
+        for step in range(max_new_tokens):
+            logits = self.inference(
+                input_ids, cu_seqlens, step
+            )  # shape: [batch_size, vocab_size]
+            next_token = torch.argmax(logits, dim=-1)  # shape: [batch_size, ]
+            input_ids = next_token
+            output_tokens.append(next_token)
+        output_tokens = torch.stack(
+            output_tokens, dim=1
+        )  # shape: [batch_size, max_new_tokens]
+        return output_tokens
 
 
 if __name__ == "__main__":
@@ -212,8 +291,14 @@ if __name__ == "__main__":
         local_blocks=2,
         window_size=512,
     )
-    model = ToyNSALlama(config).cuda().bfloat16()
-    print(f"\nCONFIG:\n{config}\n")
+    inference_config = InferenceConfig(
+        max_batch_size=4,
+        max_length=8192,
+        max_new_tokens=128,
+    )
+    model = ToyNSALlama(config, inference_config).cuda().bfloat16()
+    print(f"\nMODEL CONFIG:\n{config}\n")
+    print(f"\nINFERENCE CONFIG:\n{inference_config}\n")
     print(f"\nMODEL:\n{model}\n")
 
     # example input
@@ -229,3 +314,7 @@ if __name__ == "__main__":
     # example output
     logits = model(input_ids, cu_seqlens)
     print(f"\nEXAMPLE OUTPUT:\nlogits: {logits.shape}\n")
+
+    # example generate
+    output_tokens = model.generate(input_ids, cu_seqlens, 8)
+    print(f"\nEXAMPLE GENERATE:\noutput_tokens: {output_tokens}\n")
