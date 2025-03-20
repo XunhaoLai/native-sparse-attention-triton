@@ -155,18 +155,18 @@ if __name__ == "__main__":
             styles=[("green", "-"), ("green", "--"), ("blue", "-"), ("blue", "--")],
             ylabel="ms",
             plot_name="** forward with block size 64 **",
-            args={"H": 32, "D": 128},
+            args={"H": 32, "D": 128, "K": 64},
         )
     )
-    def benchmark(N, H, D, provider):
+    def benchmark(N, H, D, K, provider):
         q = torch.randn((N, H, D), device="cuda", dtype=torch.bfloat16)
         k = torch.randn((N, H // 16, D), device="cuda", dtype=torch.bfloat16)
         v = torch.randn((N, H // 16, D), device="cuda", dtype=torch.bfloat16)
         cu_seqlens = torch.tensor([0, N], device="cuda", dtype=torch.int32)
         sm_scale = 1 / math.sqrt(D)
 
-        top8_idx = generate_topk_idx_example(cu_seqlens[1:], 64, 8, H // 16)
-        top16_idx = generate_topk_idx_example(cu_seqlens[1:], 64, 16, H // 16)
+        top8_idx = generate_topk_idx_example(cu_seqlens[1:], K, 8, H // 16)
+        top16_idx = generate_topk_idx_example(cu_seqlens[1:], K, 16, H // 16)
 
         quantiles = [0.5, 0.2, 0.8]
         if provider == "flash":
@@ -195,14 +195,14 @@ if __name__ == "__main__":
         if provider == "triton-top8":
             ms, min_ms, max_ms = triton.testing.do_bench(
                 lambda: _topk_sparse_attention_fwd(
-                    q, k, v, top8_idx, 64, cu_seqlens, cu_seqlens, N, N, sm_scale
+                    q, k, v, top8_idx, K, cu_seqlens, cu_seqlens, N, N, sm_scale
                 ),
                 quantiles=quantiles,
             )
         if provider == "triton-top16":
             ms, min_ms, max_ms = triton.testing.do_bench(
                 lambda: _topk_sparse_attention_fwd(
-                    q, k, v, top16_idx, 64, cu_seqlens, cu_seqlens, N, N, sm_scale
+                    q, k, v, top16_idx, K, cu_seqlens, cu_seqlens, N, N, sm_scale
                 ),
                 quantiles=quantiles,
             )
@@ -226,10 +226,10 @@ if __name__ == "__main__":
             styles=[("green", "-"), ("green", "--"), ("blue", "-"), ("blue", "--")],
             ylabel="ms",
             plot_name="** backward with block size 64 **",
-            args={"H": 32, "D": 128},
+            args={"H": 32, "D": 128, "K": 64},
         )
     )
-    def benchmark(N, H, D, provider):
+    def benchmark(N, H, D, K, provider):
         q = torch.randn((N, H, D), device="cuda", dtype=torch.bfloat16)
         k = torch.randn((N, H // 16, D), device="cuda", dtype=torch.bfloat16)
         v = torch.randn((N, H // 16, D), device="cuda", dtype=torch.bfloat16)
@@ -238,8 +238,8 @@ if __name__ == "__main__":
         lse = torch.randn((N, H), device="cuda", dtype=torch.bfloat16)
         sm_scale = 1 / math.sqrt(D)
         cu_seqlens = torch.tensor([0, N], device="cuda", dtype=torch.int32)
-        top8_idx = generate_topk_idx_example(cu_seqlens[1:], 64, 8, H // 16)
-        top16_idx = generate_topk_idx_example(cu_seqlens[1:], 64, 16, H // 16)
+        top8_idx = generate_topk_idx_example(cu_seqlens[1:], K, 8, H // 16)
+        top16_idx = generate_topk_idx_example(cu_seqlens[1:], K, 16, H // 16)
         dq = torch.zeros_like(q)
         dk = torch.zeros_like(k)
         dv = torch.zeros_like(v)
@@ -288,7 +288,7 @@ if __name__ == "__main__":
                     k,
                     v,
                     top8_idx,
-                    64,
+                    K,
                     cu_seqlens,
                     cu_seqlens,
                     N,
@@ -307,7 +307,7 @@ if __name__ == "__main__":
                     k,
                     v,
                     top16_idx,
-                    64,
+                    K,
                     cu_seqlens,
                     cu_seqlens,
                     N,

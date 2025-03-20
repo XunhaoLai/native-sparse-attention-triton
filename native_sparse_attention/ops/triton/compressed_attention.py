@@ -18,10 +18,10 @@ import torch
 import triton
 import triton.language as tl
 import warnings
-from native_sparse_attention.ops.triton.utils import is_hopper_gpu
+from native_sparse_attention.ops.triton.utils import get_num_warps_stages, is_hopper_gpu
 
 
-IS_HOPPER = is_hopper_gpu()
+IS_HOPPER_GPU = is_hopper_gpu()
 
 
 @triton.jit
@@ -317,34 +317,34 @@ def backward_dkdv(
     q_lo = pid_k * BLOCK_SIZE_K * kernel_stride + kernel_size - 1
     q_ptrs = tl.make_block_ptr(
         base=q_ptr + q_start * stride_qn + pid_h * stride_qh,
-        shape=(q_len, HEAD_DIM),
-        strides=(stride_qn, stride_qd),
-        offsets=(q_lo, 0),
-        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_D),
-        order=(1, 0),
+        shape=(HEAD_DIM, q_len),
+        strides=(stride_qd, stride_qn),
+        offsets=(0, q_lo),
+        block_shape=(BLOCK_SIZE_D, BLOCK_SIZE_Q),
+        order=(0, 1),
     )
     do_ptrs = tl.make_block_ptr(
         base=do_ptr + q_start * stride_don + pid_h * stride_doh,
-        shape=(q_len, HEAD_DIM),
-        strides=(stride_don, stride_dod),
-        offsets=(q_lo, 0),
-        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_D),
-        order=(1, 0),
+        shape=(HEAD_DIM, q_len),
+        strides=(stride_dod, stride_don),
+        offsets=(0, q_lo),
+        block_shape=(BLOCK_SIZE_D, BLOCK_SIZE_Q),
+        order=(0, 1),
     )
     d_ptrs = tl.make_block_ptr(
         base=d_ptr + q_start * stride_dn + pid_h * stride_dh,
-        shape=(q_len, 1),
-        strides=(stride_dn, stride_dh),
-        offsets=(q_lo, 0),
-        block_shape=(BLOCK_SIZE_Q, 1),
-        order=(0, 1),
+        shape=(1, q_len),
+        strides=(0, stride_dn),
+        offsets=(0, q_lo),
+        block_shape=(1, BLOCK_SIZE_Q),
+        order=(1, 0),
     )
     lse_ptrs = tl.make_block_ptr(
         base=lse_ptr + q_start * stride_ln + pid_h * stride_lh,
-        shape=(q_len, 1),
-        strides=(stride_ln, stride_lh),
-        offsets=(q_lo, 0),
-        block_shape=(BLOCK_SIZE_Q, 1),
+        shape=(1, q_len),
+        strides=(0, stride_ln),
+        offsets=(0, q_lo),
+        block_shape=(1, BLOCK_SIZE_Q),
         order=(0, 1),
     )
     # loop for q blocks
@@ -355,23 +355,27 @@ def backward_dkdv(
         lse = tl.load(lse_ptrs, boundary_check=(0, 1), padding_option="zero")
         d = tl.load(d_ptrs, boundary_check=(0, 1), padding_option="zero")
         # compute qk
-        qk = tl.where((off_q + i)[:, None] >= off_k[None, :], float(0.0), float("-inf"))
-        qk += tl.dot(q, tl.trans(k)) * qk_scale
+        # [BLOCK_SIZE_K, HEAD_DIM] @ [HEAD_DIM, BLOCK_SIE_Q] -> [BLOCK_SIZE_K, BLOCK_SIE_Q]
+        qk = tl.where(off_k[:, None] <= (off_q + i)[None, :], float(0.0), float("-inf"))
+        qk += tl.dot(k, q) * qk_scale
         # compute p, ds
+        # [BLOCK_SIZE_K, BLOCK_SIE_Q] - [1, BLOCK_SIZE_Q] -> [BLOCK_SIZE_K, BLOCK_SIE_Q]
         p = tl.exp2(qk - lse)
-        dp = tl.dot(do, tl.trans(v))
+        # [BLOCK_SIZE_K, HEAD_DIM] @ [HEAD_DIM, BLOCK_SIE_Q] -> [BLOCK_SIZE_K, BLOCK_SIE_Q]
+        dp = tl.dot(v, do)
         ds = sm_scale * p * (dp - d)
         # cast dtype
         p = p.to(do.dtype)
         ds = ds.to(q.dtype)
         # update dk and dv
-        dk += tl.dot(tl.trans(ds), q)
-        dv += tl.dot(tl.trans(p), do)
+        # [BLOCK_SIZE_K, BLOCK_SIE_Q] @ [BLOCK_SIE_Q, HEAD_DIM] -> [BLOCK_SIZE_K, HEAD_DIM]
+        dk += tl.dot(ds, tl.trans(q))
+        dv += tl.dot(p, tl.trans(do))
         # increment pointers
-        q_ptrs = tl.advance(q_ptrs, (BLOCK_SIZE_Q, 0))
-        do_ptrs = tl.advance(do_ptrs, (BLOCK_SIZE_Q, 0))
-        lse_ptrs = tl.advance(lse_ptrs, (BLOCK_SIZE_Q, 0))
-        d_ptrs = tl.advance(d_ptrs, (BLOCK_SIZE_Q, 0))
+        q_ptrs = tl.advance(q_ptrs, (0, BLOCK_SIZE_Q))
+        do_ptrs = tl.advance(do_ptrs, (0, BLOCK_SIZE_Q))
+        lse_ptrs = tl.advance(lse_ptrs, (0, BLOCK_SIZE_Q))
+        d_ptrs = tl.advance(d_ptrs, (0, BLOCK_SIZE_Q))
     # save dk dv
     tl.store(dk_ptrs, dk.to(dk_ptr.dtype.element_ty), boundary_check=(0, 1))
     tl.store(dv_ptrs, dv.to(dv_ptr.dtype.element_ty), boundary_check=(0, 1))
@@ -464,11 +468,11 @@ def backward_dq(
     )
     v_ptrs = tl.make_block_ptr(
         base=v_ptr + k_start * stride_vn + pid_kh * stride_vh,
-        shape=(k_len, HEAD_DIM),
-        strides=(stride_vn, stride_vd),
+        shape=(HEAD_DIM, k_len),
+        strides=(stride_vd, stride_vn),
         offsets=(0, 0),
-        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_D),
-        order=(1, 0),
+        block_shape=(BLOCK_SIZE_D, BLOCK_SIZE_K),
+        order=(0, 1),
     )
     do_ptrs = tl.make_block_ptr(
         base=do_ptr + q_start * stride_don + pid_h * stride_doh,
@@ -518,7 +522,7 @@ def backward_dq(
         qk += tl.dot(q, tl.trans(k)) * qk_scale
         # compute p, ds
         p = tl.exp2(qk - lse)
-        dp = tl.dot(do, tl.trans(v))
+        dp = tl.dot(do, v)
         ds = sm_scale * p * (dp - d)
         # cast dtype
         ds = ds.to(q.dtype)
@@ -526,7 +530,7 @@ def backward_dq(
         dq += tl.dot(ds, k)
         # increment pointers
         k_ptrs = tl.advance(k_ptrs, (BLOCK_SIZE_K, 0))
-        v_ptrs = tl.advance(v_ptrs, (BLOCK_SIZE_K, 0))
+        v_ptrs = tl.advance(v_ptrs, (0, BLOCK_SIZE_K))
     # save dq
     tl.store(dq_ptrs, dq.to(dq_ptr.dtype.element_ty), boundary_check=(0, 1))
 
@@ -570,11 +574,10 @@ def _compressed_attention_fwd(
         num_q_heads,
         triton.cdiv(max_seqlen_q, META["BLOCK_SIZE_Q"]),
     )
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
     BLOCK_SIZE_Q = 128
-    BLOCK_SIZE_K = 64
+    BLOCK_SIZE_K = 128
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_Q, IS_HOPPER_GPU)
     forward_kernel[grid](
         q,
         k,
@@ -637,8 +640,7 @@ def _compressed_attention_bwd(
     grid = lambda META: (triton.cdiv(o_len, META["BLOCK_SIZE_O"]), num_o_heads)
     BLOCK_SIZE_O = 256
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_O, IS_HOPPER_GPU)
     backward_sum_o_do[grid](
         o,
         do,
@@ -671,15 +673,10 @@ def _compressed_attention_bwd(
         num_q_heads,
         triton.cdiv(max_seqlen_k, META["BLOCK_SIZE_K"]),
     )
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
-    if IS_HOPPER:
-        BLOCK_SIZE_Q = 32
-        BLOCK_SIZE_K = 64
-    else:
-        BLOCK_SIZE_Q = 64
-        BLOCK_SIZE_K = 128
+    BLOCK_SIZE_Q = 64
+    BLOCK_SIZE_K = 128
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_K, IS_HOPPER_GPU)
     backward_dkdv[grid](
         q,
         k,
@@ -736,10 +733,9 @@ def _compressed_attention_bwd(
         num_q_heads,
         triton.cdiv(max_seqlen_q, META["BLOCK_SIZE_Q"]),
     )
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
     BLOCK_SIZE_Q = 128
     BLOCK_SIZE_K = 64
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_Q, IS_HOPPER_GPU)
     backward_dq[grid](
         q,
         k,
@@ -994,8 +990,6 @@ def _get_attention_score(
         triton.cdiv(max_seqlen_q, META["BLOCK_SIZE_Q"]),
         triton.cdiv(max_seqlen_k, META["BLOCK_SIZE_K"]),
     )
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
     BLOCK_SIZE_Q = 128
     BLOCK_SIZE_K = 128
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
@@ -1026,8 +1020,8 @@ def _get_attention_score(
         BLOCK_SIZE_Q=BLOCK_SIZE_Q,
         BLOCK_SIZE_K=BLOCK_SIZE_K,
         BLOCK_SIZE_D=BLOCK_SIZE_D,
-        num_warps=num_warps,
-        num_stages=num_stages,
+        num_warps=8,
+        num_stages=3,
     )
     return score
 

@@ -17,10 +17,10 @@ from typing import Any, Optional
 import torch
 import triton
 import triton.language as tl
-from native_sparse_attention.ops.triton.utils import is_hopper_gpu
+from native_sparse_attention.ops.triton.utils import get_num_warps_stages, is_hopper_gpu
 
 
-IS_HOPPER = is_hopper_gpu()
+IS_HOPPER_GPU = is_hopper_gpu()
 
 
 @triton.jit
@@ -589,11 +589,10 @@ def _flash_attention_fwd(
         num_q_heads,
         triton.cdiv(max_seqlen_q, META["BLOCK_SIZE_Q"]),
     )
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
     BLOCK_SIZE_Q = 128
     BLOCK_SIZE_K = 64
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_Q, IS_HOPPER_GPU)
     forward_kernel[grid](
         q,
         k,
@@ -656,8 +655,7 @@ def _flash_attention_bwd(
     grid = lambda META: (triton.cdiv(o_len, META["BLOCK_SIZE_O"]), num_o_heads)
     BLOCK_SIZE_O = 256
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_O, IS_HOPPER_GPU)
     backward_sum_o_do[grid](
         o,
         do,
@@ -690,15 +688,10 @@ def _flash_attention_bwd(
         num_q_heads,
         triton.cdiv(max_seqlen_k, META["BLOCK_SIZE_K"]),
     )
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
-    if IS_HOPPER:
-        BLOCK_SIZE_Q = 32
-        BLOCK_SIZE_K = 64
-    else:
-        BLOCK_SIZE_Q = 64
-        BLOCK_SIZE_K = 128
+    BLOCK_SIZE_Q = 64
+    BLOCK_SIZE_K = 64
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_K, IS_HOPPER_GPU)
     backward_dkdv[grid](
         q,
         k,
@@ -755,10 +748,9 @@ def _flash_attention_bwd(
         num_q_heads,
         triton.cdiv(max_seqlen_q, META["BLOCK_SIZE_Q"]),
     )
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
     BLOCK_SIZE_Q = 128
     BLOCK_SIZE_K = 64
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_Q, IS_HOPPER_GPU)
     backward_dq[grid](
         q,
         k,

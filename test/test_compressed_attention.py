@@ -16,10 +16,17 @@ import math
 from native_sparse_attention.ops.torch.compressed_attention import (
     compressed_attention_torch,
 )
-from native_sparse_attention.ops.triton.compressed_attention import compressed_attention
+from native_sparse_attention.ops.triton.compressed_attention import (
+    compressed_attention,
+    _compressed_attention_bwd,
+)
 from native_sparse_attention.ops import avgpool_compress
-from native_sparse_attention.ops.triton.flash_attention import flash_attention_varlen
+from native_sparse_attention.ops.triton.flash_attention import (
+    flash_attention_varlen,
+    _flash_attention_bwd,
+)
 from flash_attn import flash_attn_varlen_func
+from flash_attn.flash_attn_interface import _flash_attn_varlen_backward
 
 
 if __name__ == "__main__":
@@ -141,7 +148,7 @@ if __name__ == "__main__":
     @triton.testing.perf_report(
         triton.testing.Benchmark(
             x_names=["N"],
-            x_vals=[1024 * 2**i for i in range(1, 6)],
+            x_vals=[1024 * 2**i for i in range(1, 8)],
             line_arg="provider",
             line_vals=[
                 "flash",
@@ -223,6 +230,102 @@ if __name__ == "__main__":
                     16,
                     64,
                     -1,
+                    cu_seqlens,
+                    com_cu_seqlens,
+                    N,
+                    M,
+                    sm_scale,
+                ),
+                quantiles=quantiles,
+            )
+        return ms, min_ms, max_ms
+
+    benchmark.run(show_plots=True, print_data=True)
+
+    # benchmark
+    @triton.testing.perf_report(
+        triton.testing.Benchmark(
+            x_names=["N"],
+            x_vals=[1024 * 2**i for i in range(1, 8)],
+            line_arg="provider",
+            line_vals=[
+                "flash",
+                "triton-flash",
+                "triton-compressed",
+            ],
+            line_names=[
+                "Flash",
+                "Triton-Flash",
+                "Compressed",
+            ],
+            styles=[("green", "-"), ("green", "--"), ("blue", "-"), ("blue", "--")],
+            ylabel="ms",
+            plot_name="** backward speed for compressed attention (kernel 32 stride 16) **",
+            args={"H": 32, "D": 128},
+        )
+    )
+    def benchmark(N, H, D, provider):
+        q = torch.randn((N, H, D), device="cuda", dtype=torch.bfloat16)
+        k = torch.randn((N, H // 16, D), device="cuda", dtype=torch.bfloat16)
+        v = torch.randn((N, H // 16, D), device="cuda", dtype=torch.bfloat16)
+        o = torch.randn((N, H, D), device="cuda", dtype=torch.bfloat16)
+        do = torch.randn((N, H, D), device="cuda", dtype=torch.bfloat16)
+        lse = torch.randn((N, H), device="cuda", dtype=torch.bfloat16)
+        sm_scale = 1 / math.sqrt(D)
+        cu_seqlens = torch.tensor([0, N], device="cuda", dtype=torch.int32)
+        dq = torch.zeros_like(q)
+        dk = torch.zeros_like(k)
+        dv = torch.zeros_like(v)
+
+        com_k, com_cu_seqlens = avgpool_compress(k, None, cu_seqlens, 32, 16, None)
+        com_v, com_cu_seqlens = avgpool_compress(v, None, cu_seqlens, 32, 16, None)
+        M = (com_cu_seqlens[1:] - com_cu_seqlens[:-1]).max().item()
+
+        quantiles = [0.5, 0.2, 0.8]
+        if provider == "flash":
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: _flash_attn_varlen_backward(
+                    do,
+                    q,
+                    k,
+                    v,
+                    o,
+                    lse.transpose(0, 1),
+                    dq,
+                    dk,
+                    dv,
+                    cu_seqlens,
+                    cu_seqlens,
+                    N,
+                    N,
+                    dropout_p=0.0,
+                    causal=True,
+                    softmax_scale=sm_scale,
+                    window_size=(-1, -1),
+                    softcap=0.0,
+                    alibi_slopes=None,
+                    deterministic=False,
+                ),
+                quantiles=quantiles,
+            )
+        if provider == "triton-flash":
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: _flash_attention_bwd(
+                    o, do, lse, q, k, v, cu_seqlens, cu_seqlens, N, N, True, sm_scale
+                ),
+                quantiles=quantiles,
+            )
+        if provider == "triton-compressed":
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: _compressed_attention_bwd(
+                    o,
+                    do,
+                    lse,
+                    q,
+                    com_k,
+                    com_v,
+                    32,
+                    16,
                     cu_seqlens,
                     com_cu_seqlens,
                     N,

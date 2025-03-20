@@ -17,6 +17,10 @@ from typing import Any, Optional
 import torch
 import triton
 import triton.language as tl
+from native_sparse_attention.ops.triton.utils import get_num_warps_stages, is_hopper_gpu
+
+
+IS_HOPPER_GPU = is_hopper_gpu()
 
 
 @triton.jit
@@ -753,11 +757,11 @@ def backward_dq(
         )
         v_ptrs = tl.make_block_ptr(
             base=v_ptr + k_start * stride_vn + pid_kh * stride_vh,
-            shape=(k_len, HEAD_DIM),
-            strides=(stride_vn, stride_vd),
+            shape=(HEAD_DIM, k_len),
+            strides=(stride_vd, stride_vn),
             offsets=(0, 0),
-            block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_D),
-            order=(1, 0),
+            block_shape=(BLOCK_SIZE_D, BLOCK_SIZE_K),
+            order=(0, 1),
         )
         do_ptrs = tl.make_block_ptr(
             base=do_ptr + (q_start + pid_q_j) * stride_don + pid_h * stride_doh,
@@ -802,7 +806,7 @@ def backward_dq(
                 tl.advance(k_ptrs, (c, 0)), boundary_check=(1, 0), padding_option="zero"
             )
             v = tl.load(
-                tl.advance(v_ptrs, (c, 0)), boundary_check=(0, 1), padding_option="zero"
+                tl.advance(v_ptrs, (0, c)), boundary_check=(0, 1), padding_option="zero"
             )
             # compute qk
             qk = tl.zeros((BLOCK_SIZE_H, BLOCK_SIZE_K), dtype=tl.float32)
@@ -811,7 +815,7 @@ def backward_dq(
             qk += tl.dot(q, tl.trans(k)) * qk_scale
             # compute p, ds
             p = tl.exp2(qk - lse)
-            dp = tl.dot(do, tl.trans(v))
+            dp = tl.dot(do, v)
             ds = sm_scale * p * (dp - d)
             # cast dtype
             ds = ds.to(q.dtype)
@@ -932,8 +936,7 @@ def _topk_sparse_attention_bwd(
     delta = torch.zeros([num_o_heads, o_len], device=o.device, dtype=torch.float32)
     BLOCK_SIZE_O = 256
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_O, IS_HOPPER_GPU)
     grid = (triton.cdiv(o_len, BLOCK_SIZE_O), num_o_heads)
     backward_sum_o_do[grid](
         o,
@@ -987,11 +990,10 @@ def _topk_sparse_attention_bwd(
         num_share_q_heads, k_len, num_k_heads, head_dim, device=k.device, dtype=k.dtype
     )
     batch_size = cu_seqlens_q.shape[0] - 1
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
     BLOCK_SIZE_K = triton.next_power_of_2(block_size)
-    BLOCK_SIZE_Q = 128 if BLOCK_SIZE_K <= 64 else 64
+    BLOCK_SIZE_Q = 64
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_Q, IS_HOPPER_GPU)
     grid = (batch_size, num_q_heads, triton.cdiv(max_seqlen_k, BLOCK_SIZE_K))
     backward_dkdv[grid](
         q,
@@ -1054,12 +1056,11 @@ def _topk_sparse_attention_bwd(
         cu_seqlens_q[-1].item() // 32768 + 1
     )  # calculate multiple querys in one kernel if seqlence length is too long
     grid = (batch_size, num_k_heads, triton.cdiv(max_seqlen_q, num_q_loop))
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
     BLOCK_SIZE_K = block_size
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
     BLOCK_SIZE_H = max(16, triton.next_power_of_2(num_share_q_heads))
     BLOCK_SIZE_T = triton.next_power_of_2(topk)
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_K, IS_HOPPER_GPU)
     backward_dq[grid](
         q,
         k,
