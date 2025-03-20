@@ -316,5 +316,5 @@ if __name__ == "__main__":
     print(f"\nEXAMPLE OUTPUT:\nlogits: {logits.shape}\n")
 
     # example generate
-    output_tokens = model.generate(input_ids, cu_seqlens, 8)
+    output_tokens = model.generate(input_ids, cu_seqlens, 64)
     print(f"\nEXAMPLE GENERATE:\noutput_tokens: {output_tokens}\n")
