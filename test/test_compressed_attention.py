@@ -261,7 +261,7 @@ if __name__ == "__main__":
             styles=[("green", "-"), ("green", "--"), ("blue", "-"), ("blue", "--")],
             ylabel="ms",
             plot_name="** backward speed for compressed attention (kernel 32 stride 16) **",
-            args={"H": 32, "D": 128},
+            args={"H": 64, "D": 128},
         )
     )
     def benchmark(N, H, D, provider):

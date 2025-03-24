@@ -155,7 +155,7 @@ if __name__ == "__main__":
             styles=[("green", "-"), ("green", "--"), ("blue", "-"), ("blue", "--")],
             ylabel="ms",
             plot_name="** forward with block size 64 **",
-            args={"H": 32, "D": 128, "K": 64},
+            args={"H": 64, "D": 128, "K": 64},
         )
     )
     def benchmark(N, H, D, K, provider):
@@ -226,7 +226,7 @@ if __name__ == "__main__":
             styles=[("green", "-"), ("green", "--"), ("blue", "-"), ("blue", "--")],
             ylabel="ms",
             plot_name="** backward with block size 64 **",
-            args={"H": 32, "D": 128, "K": 64},
+            args={"H": 64, "D": 128, "K": 64},
         )
     )
     def benchmark(N, H, D, K, provider):
