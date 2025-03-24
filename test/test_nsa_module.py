@@ -114,7 +114,7 @@ if __name__ == "__main__":
             line_names=["Self-Attention", "Native-Sparse-Attention"],
             styles=[("green", "-"), ("blue", "-")],
             ylabel="ms",
-            plot_name="** NSA speed benchmark **",
+            plot_name="** NSA forward speed benchmark **",
             args={},
         )
     )
@@ -133,6 +133,39 @@ if __name__ == "__main__":
                     lambda: NSA(x, cu_seqlens),
                     quantiles=quantiles,
                 )
+        return ms, min_ms, max_ms
+
+    benchmark.run(show_plots=True, print_data=True)
+
+    @triton.testing.perf_report(
+        triton.testing.Benchmark(
+            x_names=["N"],
+            x_vals=[1024 * 2**i for i in range(1, 8)],
+            line_arg="provider",
+            line_vals=["Self-Attention", "Native-Sparse-Attention"],
+            line_names=["Self-Attention", "Native-Sparse-Attention"],
+            styles=[("green", "-"), ("blue", "-")],
+            ylabel="ms",
+            plot_name="** NSA backward speed benchmark **",
+            args={},
+        )
+    )
+    def benchmark(N, provider):
+        x = torch.randn(N, 8192, device="cuda", dtype=torch.bfloat16)
+        cu_seqlens = torch.tensor([0, N], device="cuda", dtype=torch.int32)
+        quantiles = [0.5, 0.2, 0.8]
+        if provider == "Self-Attention":
+            loss = SelfAttn(x.clone().detach().requires_grad_(), cu_seqlens).mean()
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: loss.backward(retain_graph=True),
+                quantiles=quantiles,
+            )
+        elif provider == "Native-Sparse-Attention":
+            loss = NSA(x.clone().detach().requires_grad_(), cu_seqlens).mean()
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: loss.backward(retain_graph=True),
+                quantiles=quantiles,
+            )
         return ms, min_ms, max_ms
 
     benchmark.run(show_plots=True, print_data=True)
