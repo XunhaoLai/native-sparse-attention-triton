@@ -21,9 +21,10 @@ def topk_sparse_attention_torch(
     k: torch.Tensor,
     v: torch.Tensor,
     topk_idx: torch.Tensor,
-    block_size: int,
+    block_size_k: int,
     cu_seqlens: torch.Tensor,
     softmax_scale: Optional[float] = None,
+    block_size_q: int = 1,
 ) -> torch.Tensor:
     """Simple topk sparse attention varlen version implemented in torch. Extremly slow, only for debugging.
 
@@ -32,7 +33,8 @@ def topk_sparse_attention_torch(
         k (torch.Tensor): shape [total_len, num_kv_heads, head_dim]
         v (torch.Tensor): shape [total_len, num_kv_heads, head_dim]
         topk_idx (torch.Tensor): topk block idx for each query, shape [num_kv_heads, total_len, topk]. -1 means padding.
-        block_size (int): key value block size.
+        block_size_q (int): query block size.
+        block_size_k (int): key value block size.
         cu_seqlens (torch.Tensor): shape [batch_size + 1], similar to cu_seqlens in flash_attn_func_varlen.
         softmax_scale (Optional[float], optional): Defaults to None, means 1/sqrt(head_dim).
 
@@ -45,30 +47,30 @@ def topk_sparse_attention_torch(
     batch_size = cu_seqlens.shape[0] - 1
     topk = topk_idx.shape[-1]
     seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
+    seqblocks_q = torch.ceil(seqlens / block_size_q).to(torch.int32)
+    cu_seqblocks_q = torch.nn.functional.pad(seqblocks_q.cumsum(0), (1, 0), value=0)
     if softmax_scale is None:
         softmax_scale = 1.0 / math.sqrt(head_dim)
-    # causal mask for topk idx
-    q_idx = torch.cat(
-        [torch.arange(seqlens[i], device="cuda") for i in range(batch_size)], dim=0
-    )
-    topk_idx[topk_idx > (q_idx // block_size)[None, :, None]] = -1
     # get mask
     mask = torch.zeros(
         (num_kv_heads, total_seqlen, total_seqlen), dtype=torch.bool, device=q.device
     )
     for i in range(batch_size):
-        start = cu_seqlens[i]
+        num_q_blocks = math.ceil(seqlens[i] / block_size_q)
+        num_kv_blocks = math.ceil(seqlens[i] / block_size_k)
         for h in range(num_kv_heads):
-            for j in range(seqlens[i]):
-                for t in range(topk):
-                    if topk_idx[h, start + j, t] != -1:
-                        mask[
-                            h,
-                            start + j,
-                            start
-                            + topk_idx[h, start + j, t] * block_size : start
-                            + (topk_idx[h, start + j, t] + 1) * block_size,
-                        ] = True
+            temp_mask = torch.zeros(
+                num_q_blocks, num_kv_blocks, dtype=torch.bool, device=q.device
+            )
+            temp_idx = topk_idx[h, cu_seqblocks_q[i] : cu_seqblocks_q[i + 1]].clone()
+            temp_idx[temp_idx < 0] = 0
+            temp_mask[torch.arange(num_q_blocks).to(q.device)[:, None], temp_idx] = True
+            temp_mask = torch.repeat_interleave(temp_mask, block_size_q, dim=0)
+            temp_mask = torch.repeat_interleave(temp_mask, block_size_k, dim=1)
+            temp_mask = temp_mask[: seqlens[i], : seqlens[i]]
+            mask[
+                h, cu_seqlens[i] : cu_seqlens[i + 1], cu_seqlens[i] : cu_seqlens[i + 1]
+            ] = temp_mask
     mask = torch.tril(mask).repeat_interleave(num_share_q_heads, 0)
     # qk attn
     qk = (

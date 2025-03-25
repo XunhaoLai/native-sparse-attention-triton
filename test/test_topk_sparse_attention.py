@@ -32,13 +32,18 @@ from flash_attn.flash_attn_interface import (
 
 
 def generate_topk_idx_example(
-    seqlens: torch.Tensor, block_size: int, topk: int, num_heads: int
+    seqlens: torch.Tensor,
+    block_size_k: int,
+    topk: int,
+    num_heads: int,
+    block_size_q: int = 1,
 ) -> torch.Tensor:
     """Generate topk idx example for test.
 
     Args:
         seqlens (torch.Tensor): shape [batch_size + 1], similar to cu_seqlens in flash_attn_func_varlen.
-        block_size (int): key value block size
+        block_size_q (int): query block size
+        block_size_k (int): key value block size
         topk (int): selected topk
         num_heads (int): number of key value heads
 
@@ -46,8 +51,9 @@ def generate_topk_idx_example(
         torch.Tensor: shape [num_heads, total_seqlen, topk], topk key value block idx for each query. -1 means padding.
     """
     batch_size = seqlens.shape[0]
-    num_blocks = torch.ceil(seqlens / block_size).to(torch.int32)
+    num_blocks = torch.ceil(seqlens / block_size_k).to(torch.int32)
     topk_idx_all_heads = []
+    cu_seqlens = torch.nn.functional.pad(seqlens.cumsum(0), pad=(1, 0), value=0)
     for _ in range(num_heads):
         topk_idx = [
             torch.randn(seqlens[i], num_blocks[i], device="cuda")
@@ -67,7 +73,14 @@ def generate_topk_idx_example(
         q_idx = torch.cat(
             [torch.arange(seqlens[i], device="cuda") for i in range(batch_size)], dim=0
         )
-        topk_idx[topk_idx > (q_idx // block_size)[:, None]] = -1  # -1 means padding
+        topk_idx[topk_idx > (q_idx // block_size_k)[:, None]] = -1  # -1 means padding
+        topk_idx = torch.cat(
+            [
+                topk_idx[cu_seqlens[i] : cu_seqlens[i + 1]][0::block_size_q]
+                for i in range(batch_size)
+            ],
+            dim=0,
+        )
         topk_idx_all_heads.append(topk_idx)
     topk_idx = torch.stack(topk_idx_all_heads, dim=0)
     return topk_idx
