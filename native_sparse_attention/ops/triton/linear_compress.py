@@ -354,7 +354,7 @@ class LinearCompress(torch.autograd.Function):
         y_cu_seqlens = torch.cat(
             [
                 torch.zeros(1, dtype=torch.int32, device=y_seqlens.device),
-                torch.cumsum(y_seqlens, dim=0),
+                torch.cumsum(y_seqlens.to(x.device), dim=0),
             ],
             dim=0,
         ).to(torch.int32)
