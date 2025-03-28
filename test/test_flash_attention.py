@@ -179,7 +179,7 @@ if __name__ == "__main__":
         v = torch.randn((N, H // 16, D), device="cuda", dtype=torch.bfloat16)
         o = torch.randn((N, H, D), device="cuda", dtype=torch.bfloat16)
         do = torch.randn((N, H, D), device="cuda", dtype=torch.bfloat16)
-        lse = torch.randn((N, H), device="cuda", dtype=torch.bfloat16)
+        lse = torch.randn((H, N), device="cuda", dtype=torch.float32)
         sm_scale = 1 / math.sqrt(D)
         cu_seqlens = torch.tensor([0, N], device="cuda", dtype=torch.int32)
         dq = torch.zeros_like(q)
