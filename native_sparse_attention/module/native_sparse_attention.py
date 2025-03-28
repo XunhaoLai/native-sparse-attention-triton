@@ -59,6 +59,7 @@ class NativeSparseAttention(torch.nn.Module):
         local_blocks (int): number of blocks at the local window of each query, these blocks are force to be computed in sparse attention
         window_size (int): window size for sliding window attention
         rope_config (RopeConfig): config for rotary embedding, see native_sparse_attention.module.rope.RopeConfig for details
+        rope_device (str): device used to store rope freqs
     """
 
     def __init__(
@@ -76,6 +77,7 @@ class NativeSparseAttention(torch.nn.Module):
         local_blocks: int,
         window_size: int,
         rope_config: RopeConfig,
+        rope_device: str
     ):
         super().__init__()
         # configs
@@ -130,7 +132,7 @@ class NativeSparseAttention(torch.nn.Module):
         )
 
         # rope
-        self.rope = RotaryEmbedding(self.rope_config)
+        self.rope = RotaryEmbedding(self.rope_config, device=rope_device)
 
         # init parameters
         self.init_params()
