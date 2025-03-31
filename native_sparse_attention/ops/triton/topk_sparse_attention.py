@@ -21,7 +21,7 @@ from native_sparse_attention.ops.triton.utils import get_num_warps_stages, is_ho
 
 
 IS_HOPPER_GPU = is_hopper_gpu()
-
+import pdb
 
 @triton.jit
 def forward_kernel(
@@ -80,8 +80,8 @@ def forward_kernel(
     k_len = tl.load(cu_seqlens_k + pid_b + 1) - k_start
     if pid_q * num_q_loop >= q_len:
         return
-    num_q_loop = min(num_q_loop, q_len - pid_q * num_q_loop)
-    for j in range(num_q_loop):
+    real_q_loop = min(num_q_loop, q_len - pid_q * num_q_loop)
+    for j in range(real_q_loop):
         pid_q_j = pid_q * num_q_loop + j
         # init topk idx pointer
         off_t = tl.arange(0, BLOCK_SIZE_T)
@@ -719,8 +719,8 @@ def backward_dq(
     k_len = tl.load(cu_seqlens_k + pid_b + 1) - k_start
     if pid_q * num_q_loop >= q_len:
         return
-    num_q_loop = min(num_q_loop, q_len - pid_q * num_q_loop)
-    for j in range(num_q_loop):
+    real_q_loop = min(num_q_loop, q_len - pid_q * num_q_loop)
+    for j in range(real_q_loop):
         pid_q_j = pid_q * num_q_loop + j
         # init topk idx pointer
         off_t = tl.arange(0, BLOCK_SIZE_T)
