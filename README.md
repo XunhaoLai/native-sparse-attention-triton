@@ -23,6 +23,14 @@ Ensure the following dependencies are installed:
 3. All implementations are based on the varlen approach similiar to flash_attn_func_varlen. Please concatenate the inputs of a batch before use.
 4. Only support attention head dimension less than 128 for now.
 
+### Install
+
+You can install `native_sparse_attention` using pip:
+
+```shell
+pip install git+https://github.com/XunhaoLai/native-sparse-attention-triton.git
+```
+
 ### Functions
 
 The `ops` module has implemented several functions required for native sparse attention. For detailed usage instructions, please see [this link](https://github.com/XunhaoLai/native-sparse-attention-triton/tree/main/native_sparse_attention/ops#readme).
