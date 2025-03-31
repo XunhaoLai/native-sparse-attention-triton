@@ -543,8 +543,8 @@ def _compressed_attention_fwd(
     kernel_stride: int,
     cu_seqlens_q: torch.Tensor,
     cu_seqlens_k: torch.Tensor,
-    max_seqlen_q: torch.Tensor,
-    max_seqlen_k: torch.Tensor,
+    max_seqlen_q: int,
+    max_seqlen_k: int,
     sm_scale: float,
 ):
     # dtype check
@@ -626,8 +626,8 @@ def _compressed_attention_bwd(
     kernel_stride: int,
     cu_seqlens_q: torch.Tensor,
     cu_seqlens_k: torch.Tensor,
-    max_seqlen_q: torch.Tensor,
-    max_seqlen_k: torch.Tensor,
+    max_seqlen_q: int,
+    max_seqlen_k: int,
     sm_scale: float,
 ):
     q_len, num_q_heads, head_dim = q.shape
@@ -791,8 +791,8 @@ class CompressedAttention(torch.autograd.Function):
         kernel_stride: int,
         cu_seqlens_q: torch.Tensor,
         cu_seqlens_k: torch.Tensor,
-        max_seqlen_q: torch.Tensor,
-        max_seqlen_k: torch.Tensor,
+        max_seqlen_q: int,
+        max_seqlen_k: int,
         sm_scale=None,
     ):
         # dtype check

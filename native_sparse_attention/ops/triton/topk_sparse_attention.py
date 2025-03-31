@@ -1120,8 +1120,8 @@ class TopkSparseAttention(torch.autograd.Function):
         block_size: int,
         cu_seqlens_q: torch.Tensor,
         cu_seqlens_k: torch.Tensor,
-        max_seqlen_q: torch.Tensor,
-        max_seqlen_k: torch.Tensor,
+        max_seqlen_q: int,
+        max_seqlen_k: int,
         sm_scale=None,
     ):
         # dtype check
