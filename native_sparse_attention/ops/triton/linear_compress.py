@@ -343,7 +343,9 @@ class LinearCompress(torch.autograd.Function):
         assert kernel_size % kernel_stride == 0
         assert kernel_size in {16, 32, 64, 128}
         assert head_dim % 8 == 0
-
+        
+        torch.cuda.set_device(x.device)
+        
         # compute seqlens after compression
         seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
         y_seqlens = (
@@ -353,8 +355,8 @@ class LinearCompress(torch.autograd.Function):
         y_seqlens[seqlens < kernel_size] = 0
         y_cu_seqlens = torch.cat(
             [
-                torch.zeros(1, dtype=torch.int32, device="cuda"),
-                torch.cumsum(y_seqlens, dim=0),
+                torch.zeros(1, dtype=torch.int32, device=x.device),
+                torch.cumsum(y_seqlens.to(x.device), dim=0),
             ],
             dim=0,
         ).to(torch.int32)
