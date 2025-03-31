@@ -37,6 +37,7 @@ class SelfAttention(torch.nn.Module):
         num_kv_heads: int,
         head_dim: int,
         rope_config: RopeConfig,
+        rope_device: str = "cuda",
     ):
         super().__init__()
         # configs
@@ -61,7 +62,7 @@ class SelfAttention(torch.nn.Module):
             self.num_q_heads * self.head_dim, self.hidden_size, bias=False
         )
         # rope
-        self.rope = RotaryEmbedding(self.rope_config)
+        self.rope = RotaryEmbedding(self.rope_config, device=rope_device)
 
         # init parameters
         self.init_params()

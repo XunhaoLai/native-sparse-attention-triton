@@ -77,7 +77,7 @@ class NativeSparseAttention(torch.nn.Module):
         local_blocks: int,
         window_size: int,
         rope_config: RopeConfig,
-        rope_device: str
+        rope_device: str = "cuda",
     ):
         super().__init__()
         # configs

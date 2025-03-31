@@ -21,7 +21,7 @@ from native_sparse_attention.ops.triton.utils import get_num_warps_stages, is_ho
 
 
 IS_HOPPER_GPU = is_hopper_gpu()
-import pdb
+
 
 @triton.jit
 def forward_kernel(
@@ -859,15 +859,14 @@ def _topk_sparse_attention_fwd(
     lse = torch.zeros(num_q_heads, q_len, dtype=torch.float32, device=q.device)
     # launch kernel
     num_q_loop = (
-        cu_seqlens_q[-1].item() // 32768 + 1
+        max_seqlen_q // 32768 + 1
     )  # calculate multiple querys in one kernel if seqlence length is too long
     grid = (batch_size, num_k_heads, triton.cdiv(max_seqlen_q, num_q_loop))
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
     BLOCK_SIZE_K = triton.next_power_of_2(block_size)
     BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
     BLOCK_SIZE_H = max(16, triton.next_power_of_2(num_share_q_heads))
     BLOCK_SIZE_T = triton.next_power_of_2(topk)
+    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_K, IS_HOPPER_GPU)
     forward_kernel[grid](
         q,
         k,
@@ -1053,7 +1052,7 @@ def _topk_sparse_attention_bwd(
     # compute dq
     dq = torch.zeros_like(q)
     num_q_loop = (
-        cu_seqlens_q[-1].item() // 32768 + 1
+        max_seqlen_q // 32768 + 1
     )  # calculate multiple querys in one kernel if seqlence length is too long
     grid = (batch_size, num_k_heads, triton.cdiv(max_seqlen_q, num_q_loop))
     BLOCK_SIZE_K = block_size
