@@ -1190,8 +1190,8 @@ def compressed_attention(
     topk: int,
     cu_seqlens_q: torch.Tensor,
     cu_seqlens_k: torch.Tensor,
-    max_seqlen_q: int,
-    max_seqlen_k: int,
+    max_seqlen_q: int = None,
+    max_seqlen_k: int = None,
     sm_scale: float = None,
     init_blocks: int = 1,
     local_blocks: int = 2,
@@ -1209,8 +1209,8 @@ def compressed_attention(
         topk (int): number of blocks for each query.
         cu_seqlens_q (torch.Tensor): shape [batch_size + 1], similar to cu_seqlens_q in flash_attn_func_varlen.
         cu_seqlens_k (torch.Tensor): shape [batch_size + 1], similar to cu_seqlens_k in flash_attn_func_varlen.
-        max_seqlen_q (int): max q len of the batch.
-        max_seqlen_k (int): max k len of the batch.
+        max_seqlen_q (int): max q len of the batch. Defaults to None, means (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item().
+        max_seqlen_k (int): max k len of the batch. Defaults to None, means (cu_seqlens_k[1:] - cu_seqlens_k[:-1]).max().item().
         sm_scale (float, optional): softmax scale. Defaults to None, means 1/sqrt(head_dim).
         init_blocks (int, optional): Number of init blocks for each query. Defaults to 1.
         local_blocks (int, optional): Number of local blocks for each query. Defaults to 2.
