@@ -70,7 +70,9 @@ class RotaryEmbedding(nn.Module):
     cos = None
     sin = None
 
-    def __init__(self, config: RopeConfig, device=torch.device(torch.cuda.current_device())):
+    def __init__(
+        self, config: RopeConfig, device=torch.device(torch.cuda.current_device())
+    ):
         super().__init__()
         # BC: "rope_type" was originally "type"
         if hasattr(config, "rope_scaling") and config.rope_scaling is not None:

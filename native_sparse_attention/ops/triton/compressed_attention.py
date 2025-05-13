@@ -1088,7 +1088,7 @@ def _transform_score_kernel(
     s = tl.sum(s, axis=1)
     # init mask and local mask
     off_bq = off_q // block_size
-    off_bk = tl.arange(0, BLOCK_SIZE_K)
+    off_bk = k_start + tl.arange(0, BLOCK_SIZE_K)
     s = tl.where(
         (
             (off_bq[:, None] >= off_bk[None, :])
@@ -1102,7 +1102,6 @@ def _transform_score_kernel(
     bs_ptrs = (
         bs_ptr
         + q_start * stride_bsq
-        + k_start * stride_bsk
         + pid_h * stride_bsh
         + off_q[:, None] * stride_bsq
         + off_bk[None, :] * stride_bsk
@@ -1110,7 +1109,7 @@ def _transform_score_kernel(
     tl.store(
         bs_ptrs,
         s,
-        mask=(off_q < q_len)[:, None] & (off_bk < max_blocks - k_start)[None, :],
+        mask=(off_q < q_len)[:, None] & (off_bk < max_blocks)[None, :],
     )
 
 
