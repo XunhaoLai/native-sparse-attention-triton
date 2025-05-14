@@ -1091,10 +1091,10 @@ def _transform_score_kernel(
     off_bk = k_start + tl.arange(0, BLOCK_SIZE_K)
     s = tl.where(
         (
-            (off_bq[:, None] >= off_bk[None, :])
-            & (off_bq[:, None] < off_bk[None, :] + local_blocks)
+            (off_bq[:, None] >= off_bk[None, :])  # causal mask
+            & (off_bq[:, None] < off_bk[None, :] + local_blocks)  # local window
         )
-        | (off_bk[None, :] < init_blocks - k_start),
+        | (off_bk[None, :] < init_blocks),  # init window
         float("inf"),
         s,
     )
