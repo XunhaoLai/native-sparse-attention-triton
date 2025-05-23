@@ -36,7 +36,8 @@ def forward_kernel(
     # shape
     NUM_KV_HEADS,
     NUM_SHARE_Q_HEADS,
-    HEAD_DIM,
+    qk_head_dim,
+    v_head_dim,
     # sm_scale
     sm_scale,
     # causal
@@ -61,7 +62,8 @@ def forward_kernel(
     # META parameters
     BLOCK_SIZE_Q: tl.constexpr,  # q block size
     BLOCK_SIZE_K: tl.constexpr,  # k block size
-    BLOCK_SIZE_D: tl.constexpr,
+    BLOCK_SIZE_KD: tl.constexpr,
+    BLOCK_SIZE_VD: tl.constexpr,
 ):
     qk_scale = sm_scale * 1.44269504
     # get batch id and head id
@@ -82,26 +84,26 @@ def forward_kernel(
     # init qkv pointer
     q_ptrs = tl.make_block_ptr(
         base=q_ptr + q_start * stride_qn + pid_h * stride_qh,
-        shape=(q_len, HEAD_DIM),
+        shape=(q_len, qk_head_dim),
         strides=(stride_qn, stride_qd),
         offsets=(pid_q * BLOCK_SIZE_Q, 0),
-        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_KD),
         order=(1, 0),
     )
     k_ptrs = tl.make_block_ptr(
         base=k_ptr + k_start * stride_kn + pid_kh * stride_kh,
-        shape=(HEAD_DIM, k_len),
+        shape=(qk_head_dim, k_len),
         strides=(stride_kd, stride_kn),
         offsets=(0, 0),
-        block_shape=(BLOCK_SIZE_D, BLOCK_SIZE_K),
+        block_shape=(BLOCK_SIZE_KD, BLOCK_SIZE_K),
         order=(0, 1),
     )
     v_ptrs = tl.make_block_ptr(
         base=v_ptr + k_start * stride_vn + pid_kh * stride_vh,
-        shape=(k_len, HEAD_DIM),
+        shape=(k_len, v_head_dim),
         strides=(stride_vn, stride_vd),
         offsets=(0, 0),
-        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_VD),
         order=(1, 0),
     )
     # load q
@@ -111,7 +113,7 @@ def forward_kernel(
     off_k = tl.arange(0, BLOCK_SIZE_K)
     m_i = tl.full((BLOCK_SIZE_Q,), float("-inf"), dtype=tl.float32)
     lse_i = tl.full((BLOCK_SIZE_Q,), float("-inf"), dtype=tl.float32)
-    acc_o = tl.full((BLOCK_SIZE_Q, BLOCK_SIZE_D), 0, dtype=tl.float32)
+    acc_o = tl.full((BLOCK_SIZE_Q, BLOCK_SIZE_VD), 0, dtype=tl.float32)
     # full attention or causal attention
     lo = 0
     if causal:
@@ -151,10 +153,10 @@ def forward_kernel(
     # save output
     o_ptrs = tl.make_block_ptr(
         base=o_ptr + q_start * stride_on + pid_h * stride_oh,
-        shape=(q_len, HEAD_DIM),
+        shape=(q_len, v_head_dim),
         strides=(stride_on, stride_od),
         offsets=(pid_q * BLOCK_SIZE_Q, 0),
-        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_VD),
         order=(1, 0),
     )
     tl.store(o_ptrs, acc_o.to(o_ptr.dtype.element_ty), boundary_check=(0, 1))
@@ -223,7 +225,8 @@ def backward_dkdv(
     # shape
     NUM_KV_HEADS,
     NUM_SHARE_Q_HEADS,
-    HEAD_DIM,
+    qk_head_dim,
+    v_head_dim,
     # sm_scale
     sm_scale,
     # causal
@@ -258,7 +261,8 @@ def backward_dkdv(
     # META parameters
     BLOCK_SIZE_Q: tl.constexpr,  # q block size
     BLOCK_SIZE_K: tl.constexpr,  # k block size
-    BLOCK_SIZE_D: tl.constexpr,
+    BLOCK_SIZE_KD: tl.constexpr,
+    BLOCK_SIZE_VD: tl.constexpr,
 ):
     qk_scale = sm_scale * 1.44269504
     # get batch id and head id
@@ -281,34 +285,34 @@ def backward_dkdv(
     # init pointers
     k_ptrs = tl.make_block_ptr(
         base=k_ptr + k_start * stride_kn + pid_kh * stride_kh,
-        shape=(k_len, HEAD_DIM),
+        shape=(k_len, qk_head_dim),
         strides=(stride_kn, stride_kd),
         offsets=(pid_k * BLOCK_SIZE_K, 0),
-        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_KD),
         order=(1, 0),
     )
     dk_ptrs = tl.make_block_ptr(
         base=dk_ptr + k_start * stride_dkn + pid_kh * stride_dkh + pid_sh * stride_dks,
-        shape=(k_len, HEAD_DIM),
+        shape=(k_len, qk_head_dim),
         strides=(stride_dkn, stride_dkd),
         offsets=(pid_k * BLOCK_SIZE_K, 0),
-        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_KD),
         order=(1, 0),
     )
     v_ptrs = tl.make_block_ptr(
         base=v_ptr + k_start * stride_vn + pid_kh * stride_vh,
-        shape=(k_len, HEAD_DIM),
+        shape=(k_len, v_head_dim),
         strides=(stride_vn, stride_vd),
         offsets=(pid_k * BLOCK_SIZE_K, 0),
-        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_VD),
         order=(1, 0),
     )
     dv_ptrs = tl.make_block_ptr(
         base=dv_ptr + k_start * stride_dvn + pid_kh * stride_dvh + pid_sh * stride_dvs,
-        shape=(k_len, HEAD_DIM),
+        shape=(k_len, v_head_dim),
         strides=(stride_dvn, stride_dvd),
         offsets=(pid_k * BLOCK_SIZE_K, 0),
-        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_VD),
         order=(1, 0),
     )
     # offsets
@@ -318,8 +322,8 @@ def backward_dkdv(
     k = tl.load(k_ptrs, boundary_check=(0, 1), padding_option="zero")
     v = tl.load(v_ptrs, boundary_check=(0, 1), padding_option="zero")
     # init dk dv
-    dk = tl.zeros((BLOCK_SIZE_K, BLOCK_SIZE_D), dtype=tl.float32)
-    dv = tl.zeros((BLOCK_SIZE_K, BLOCK_SIZE_D), dtype=tl.float32)
+    dk = tl.zeros((BLOCK_SIZE_K, BLOCK_SIZE_KD), dtype=tl.float32)
+    dv = tl.zeros((BLOCK_SIZE_K, BLOCK_SIZE_VD), dtype=tl.float32)
     # causal
     if causal:
         q_lo = pid_k * BLOCK_SIZE_K
@@ -327,18 +331,18 @@ def backward_dkdv(
         q_lo = 0
     q_ptrs = tl.make_block_ptr(
         base=q_ptr + q_start * stride_qn + pid_h * stride_qh,
-        shape=(q_len, HEAD_DIM),
+        shape=(q_len, qk_head_dim),
         strides=(stride_qn, stride_qd),
         offsets=(q_lo, 0),
-        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_KD),
         order=(1, 0),
     )
     do_ptrs = tl.make_block_ptr(
         base=do_ptr + q_start * stride_don + pid_h * stride_doh,
-        shape=(q_len, HEAD_DIM),
+        shape=(q_len, v_head_dim),
         strides=(stride_don, stride_dod),
         offsets=(q_lo, 0),
-        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_VD),
         order=(1, 0),
     )
     d_ptrs = tl.make_block_ptr(
@@ -407,7 +411,8 @@ def backward_dq(
     # shape
     NUM_KV_HEADS,
     NUM_SHARE_Q_HEADS,
-    HEAD_DIM,
+    qk_head_dim,
+    v_head_dim,
     # sm_scale
     sm_scale,
     # causal
@@ -437,7 +442,8 @@ def backward_dq(
     # META parameters
     BLOCK_SIZE_Q: tl.constexpr,  # q block size
     BLOCK_SIZE_K: tl.constexpr,  # k block size
-    BLOCK_SIZE_D: tl.constexpr,
+    BLOCK_SIZE_KD: tl.constexpr,
+    BLOCK_SIZE_VD: tl.constexpr,
 ):
     qk_scale = sm_scale * 1.44269504
     # get batch id and head id
@@ -458,42 +464,42 @@ def backward_dq(
     # init pointers
     q_ptrs = tl.make_block_ptr(
         base=q_ptr + q_start * stride_qn + pid_h * stride_qh,
-        shape=(q_len, HEAD_DIM),
+        shape=(q_len, qk_head_dim),
         strides=(stride_qn, stride_qd),
         offsets=(pid_q * BLOCK_SIZE_Q, 0),
-        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_KD),
         order=(1, 0),
     )
     dq_ptrs = tl.make_block_ptr(
         base=dq_ptr + q_start * stride_dqn + pid_h * stride_dqh,
-        shape=(q_len, HEAD_DIM),
+        shape=(q_len, qk_head_dim),
         strides=(stride_dqn, stride_dqd),
         offsets=(pid_q * BLOCK_SIZE_Q, 0),
-        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_KD),
         order=(1, 0),
     )
     k_ptrs = tl.make_block_ptr(
         base=k_ptr + k_start * stride_kn + pid_kh * stride_kh,
-        shape=(k_len, HEAD_DIM),
+        shape=(k_len, qk_head_dim),
         strides=(stride_kn, stride_kd),
         offsets=(0, 0),
-        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_KD),
         order=(1, 0),
     )
     v_ptrs = tl.make_block_ptr(
         base=v_ptr + k_start * stride_vn + pid_kh * stride_vh,
-        shape=(k_len, HEAD_DIM),
+        shape=(k_len, qk_head_dim),
         strides=(stride_vn, stride_vd),
         offsets=(0, 0),
-        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_VD),
         order=(1, 0),
     )
     do_ptrs = tl.make_block_ptr(
         base=do_ptr + q_start * stride_don + pid_h * stride_doh,
-        shape=(q_len, HEAD_DIM),
+        shape=(q_len, qk_head_dim),
         strides=(stride_don, stride_dod),
         offsets=(pid_q * BLOCK_SIZE_Q, 0),
-        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_D),
+        block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_VD),
         order=(1, 0),
     )
     d_ptrs = tl.make_block_ptr(
@@ -521,7 +527,7 @@ def backward_dq(
     lse = tl.load(lse_ptrs, boundary_check=(0, 1), padding_option="zero")
     d = tl.load(d_ptrs, boundary_check=(0, 1), padding_option="zero")
     # init dq
-    dq = tl.zeros((BLOCK_SIZE_Q, BLOCK_SIZE_D), dtype=tl.float32)
+    dq = tl.zeros((BLOCK_SIZE_Q, BLOCK_SIZE_KD), dtype=tl.float32)
     # causal
     if causal:
         k_hi = (pid_q + 1) * BLOCK_SIZE_Q
@@ -571,17 +577,18 @@ def _flash_attention_fwd(
     assert k.dtype == q.dtype and v.dtype == q.dtype
     assert cu_seqlens_q.dtype == torch.int32 and cu_seqlens_k.dtype == torch.int32
     # shape
-    q_len, num_q_heads, head_dim = q.shape
-    k_len, num_k_heads, head_dim = k.shape
-    v_len, num_v_heads, head_dim = v.shape
+    q_len, num_q_heads, qk_head_dim = q.shape
+    k_len, num_k_heads, qk_head_dim = k.shape
+    v_len, num_v_heads, v_head_dim = v.shape
     batch_size = cu_seqlens_q.shape[0] - 1
+    assert qk_head_dim <= 256 and v_head_dim <= 256, "head_dim must be less than 256"
     assert q_len == k_len and k_len == v_len
     # gqa
     assert num_k_heads == num_v_heads
     assert num_q_heads % num_k_heads == 0
     num_share_q_heads = num_q_heads // num_k_heads
     # output tensor
-    o = torch.empty_like(q)
+    o = torch.empty(q.shape[0], q.shape[1], v.shape[-1], dtype=q.dtype, device=q.device)
     lse = torch.empty(num_q_heads, q_len, dtype=torch.float32, device=q.device)
     # launch kernel
     grid = lambda META: (
@@ -591,8 +598,11 @@ def _flash_attention_fwd(
     )
     BLOCK_SIZE_Q = 128
     BLOCK_SIZE_K = 64
-    BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
-    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_Q, IS_HOPPER_GPU)
+    BLOCK_SIZE_KD = triton.next_power_of_2(qk_head_dim)
+    BLOCK_SIZE_VD = triton.next_power_of_2(v_head_dim)
+    num_warps, num_stages = get_num_warps_stages(
+        max(qk_head_dim, v_head_dim), BLOCK_SIZE_Q, IS_HOPPER_GPU
+    )
     forward_kernel[grid](
         q,
         k,
@@ -603,7 +613,8 @@ def _flash_attention_fwd(
         cu_seqlens_k,
         num_k_heads,
         num_share_q_heads,
-        head_dim,
+        qk_head_dim,
+        v_head_dim,
         sm_scale,
         causal,
         gqa_interleave,
@@ -623,7 +634,8 @@ def _flash_attention_fwd(
         lse.stride(1),
         BLOCK_SIZE_Q=BLOCK_SIZE_Q,
         BLOCK_SIZE_K=BLOCK_SIZE_K,
-        BLOCK_SIZE_D=BLOCK_SIZE_D,
+        BLOCK_SIZE_KD=BLOCK_SIZE_KD,
+        BLOCK_SIZE_VD=BLOCK_SIZE_VD,
         num_warps=num_warps,
         num_stages=num_stages,
     )
@@ -645,23 +657,25 @@ def _flash_attention_bwd(
     sm_scale: float,
     gqa_interleave: bool = False,
 ):
-    q_len, num_q_heads, head_dim = q.shape
-    k_len, num_k_heads, head_dim = k.shape
-    v_len, num_v_heads, head_dim = v.shape
-    o_len, num_o_heads, head_dim = o.shape
+    q_len, num_q_heads, qk_head_dim = q.shape
+    k_len, num_k_heads, qk_head_dim = k.shape
+    v_len, num_v_heads, v_head_dim = v.shape
+    o_len, num_o_heads, v_head_dim = o.shape
     num_share_q_heads = num_q_heads // num_k_heads
     # compute D
     delta = torch.empty([num_o_heads, o_len], device=o.device, dtype=torch.float32)
     grid = lambda META: (triton.cdiv(o_len, META["BLOCK_SIZE_O"]), num_o_heads)
     BLOCK_SIZE_O = 256
-    BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
-    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_O, IS_HOPPER_GPU)
+    BLOCK_SIZE_VD = triton.next_power_of_2(v_head_dim)
+    num_warps, num_stages = get_num_warps_stages(
+        max(qk_head_dim, v_head_dim), BLOCK_SIZE_O, IS_HOPPER_GPU
+    )
     backward_sum_o_do[grid](
         o,
         do,
         delta,
         o_len,
-        head_dim,
+        v_head_dim,
         o.stride(0),
         o.stride(1),
         o.stride(2),
@@ -671,16 +685,26 @@ def _flash_attention_bwd(
         delta.stride(0),
         delta.stride(1),
         BLOCK_SIZE_O=BLOCK_SIZE_O,
-        BLOCK_SIZE_D=BLOCK_SIZE_D,
+        BLOCK_SIZE_D=BLOCK_SIZE_VD,
         num_warps=num_warps,
         num_stages=num_stages,
     )
     # compute dk dv
     dk = torch.empty(
-        num_share_q_heads, k_len, num_k_heads, head_dim, device=k.device, dtype=k.dtype
+        num_share_q_heads,
+        k_len,
+        num_k_heads,
+        qk_head_dim,
+        device=k.device,
+        dtype=k.dtype,
     )
     dv = torch.empty(
-        num_share_q_heads, k_len, num_k_heads, head_dim, device=k.device, dtype=k.dtype
+        num_share_q_heads,
+        k_len,
+        num_k_heads,
+        v_head_dim,
+        device=k.device,
+        dtype=k.dtype,
     )
     batch_size = cu_seqlens_q.shape[0] - 1
     grid = lambda META: (
@@ -690,8 +714,11 @@ def _flash_attention_bwd(
     )
     BLOCK_SIZE_Q = 64
     BLOCK_SIZE_K = 64
-    BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
-    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_K, IS_HOPPER_GPU)
+    BLOCK_SIZE_KD = triton.next_power_of_2(qk_head_dim)
+    BLOCK_SIZE_VD = triton.next_power_of_2(v_head_dim)
+    num_warps, num_stages = get_num_warps_stages(
+        max(qk_head_dim, v_head_dim), BLOCK_SIZE_K, IS_HOPPER_GPU
+    )
     backward_dkdv[grid](
         q,
         k,
@@ -705,7 +732,8 @@ def _flash_attention_bwd(
         cu_seqlens_k,
         num_k_heads,
         num_share_q_heads,
-        head_dim,
+        qk_head_dim,
+        v_head_dim,
         sm_scale,
         causal,
         gqa_interleave,
@@ -735,7 +763,8 @@ def _flash_attention_bwd(
         dv.stride(3),
         BLOCK_SIZE_Q=BLOCK_SIZE_Q,
         BLOCK_SIZE_K=BLOCK_SIZE_K,
-        BLOCK_SIZE_D=BLOCK_SIZE_D,
+        BLOCK_SIZE_KD=BLOCK_SIZE_KD,
+        BLOCK_SIZE_VD=BLOCK_SIZE_VD,
         num_warps=num_warps,
         num_stages=num_stages,
     )
@@ -748,9 +777,11 @@ def _flash_attention_bwd(
         num_q_heads,
         triton.cdiv(max_seqlen_q, META["BLOCK_SIZE_Q"]),
     )
-    BLOCK_SIZE_Q = 128
+    BLOCK_SIZE_Q = 64 if max(qk_head_dim, v_head_dim) > 128 else 128
     BLOCK_SIZE_K = 64
-    num_warps, num_stages = get_num_warps_stages(head_dim, BLOCK_SIZE_Q, IS_HOPPER_GPU)
+    num_warps, num_stages = get_num_warps_stages(
+        max(qk_head_dim, v_head_dim), BLOCK_SIZE_Q, IS_HOPPER_GPU
+    )
     backward_dq[grid](
         q,
         k,
@@ -763,7 +794,8 @@ def _flash_attention_bwd(
         cu_seqlens_k,
         num_k_heads,
         num_share_q_heads,
-        head_dim,
+        qk_head_dim,
+        v_head_dim,
         sm_scale,
         causal,
         gqa_interleave,
@@ -788,7 +820,8 @@ def _flash_attention_bwd(
         dq.stride(2),
         BLOCK_SIZE_Q=BLOCK_SIZE_Q,
         BLOCK_SIZE_K=BLOCK_SIZE_K,
-        BLOCK_SIZE_D=BLOCK_SIZE_D,
+        BLOCK_SIZE_KD=BLOCK_SIZE_KD,
+        BLOCK_SIZE_VD=BLOCK_SIZE_VD,
         num_warps=num_warps,
         num_stages=num_stages,
     )

@@ -75,4 +75,6 @@ def get_num_warps_stages(head_dim, block_size, is_hopper_gpu):
         else:
             num_warps = 2
             num_stages = 2
+    if head_dim > 128:
+        num_stages = 2
     return num_warps, num_stages
