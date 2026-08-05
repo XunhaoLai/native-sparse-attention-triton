@@ -269,8 +269,8 @@ def backward_dkdv(
     pid_b = tl.program_id(0)
     pid_h = tl.program_id(1)
     if gqa_interleave:
-        pid_kh = pid_h % NUM_SHARE_Q_HEADS
-        pid_sh = pid_h // NUM_SHARE_Q_HEADS
+        pid_kh = pid_h % NUM_KV_HEADS
+        pid_sh = pid_h // NUM_KV_HEADS
     else:
         pid_kh = pid_h // NUM_SHARE_Q_HEADS
         pid_sh = pid_h % NUM_SHARE_Q_HEADS
@@ -488,7 +488,7 @@ def backward_dq(
     )
     v_ptrs = tl.make_block_ptr(
         base=v_ptr + k_start * stride_vn + pid_kh * stride_vh,
-        shape=(k_len, qk_head_dim),
+        shape=(k_len, v_head_dim),
         strides=(stride_vn, stride_vd),
         offsets=(0, 0),
         block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_VD),
@@ -496,7 +496,7 @@ def backward_dq(
     )
     do_ptrs = tl.make_block_ptr(
         base=do_ptr + q_start * stride_don + pid_h * stride_doh,
-        shape=(q_len, qk_head_dim),
+        shape=(q_len, v_head_dim),
         strides=(stride_don, stride_dod),
         offsets=(pid_q * BLOCK_SIZE_Q, 0),
         block_shape=(BLOCK_SIZE_Q, BLOCK_SIZE_VD),
